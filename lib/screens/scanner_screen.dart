@@ -120,18 +120,23 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _connect(
-    DeviceDescriptor descriptor, {
-    bool reconnect = false,
-  }) async {
+      DeviceDescriptor descriptor, {
+        bool reconnect = false,
+      }) async {
     final controller = context.read<ConnectionController>();
     setState(() {
       _handlingScan = true;
-      _feedback = null;
+      _feedback = descriptor.mode == TransportType.ble
+          ? 'Waiting for the gateway to advertise (up to 60s)...'
+          : null;
+      _feedbackIsError = false;
     });
     await _scanner.stop();
     final success = await controller.connect(descriptor, reconnect: reconnect);
     if (!mounted) return;
     if (success) {
+      await _showConnectedDialog(descriptor.deviceId);
+      if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const CalibrationScreen()),
       );
@@ -149,6 +154,25 @@ class _ScannerScreenState extends State<ScannerScreen> {
       if (_cameraAllowed) await _scanner.start();
     }
   }
+
+  Future<void> _showConnectedDialog(String deviceId) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      icon: Icon(
+        Icons.check_circle,
+        color: Theme.of(context).colorScheme.primary,
+        size: 40,
+      ),
+      title: const Text('Connection successful'),
+      content: Text('Connected to $deviceId.'),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Continue'),
+        ),
+      ],
+    ),
+  );
 
   String _friendlyConnectionError(String? message) {
     if (message?.contains('permission') ?? false) {
@@ -262,13 +286,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           onDetect: _onCapture,
                           errorBuilder: (_, _) => const _PermissionMessage(
                             message:
-                                'Camera is unavailable. Check camera access and try again.',
+                            'Camera is unavailable. Check camera access and try again.',
                           ),
                         )
                       else
                         const _PermissionMessage(
                           message:
-                              'Camera permission denied. Allow camera access in Settings to scan a gateway.',
+                          'Camera permission denied. Allow camera access in Settings to scan a gateway.',
                         ),
                       if (_cameraAllowed) ScanFrameOverlay(size: size),
                       Positioned(
@@ -355,12 +379,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       onPressed: _handlingScan
                           ? null
                           : () => _connect(
-                              DeviceDescriptor.fromScannedPayload(
-                                DeviceContract.testStatusPayload['deviceId']!
-                                    as String,
-                                barcode: false,
-                              ),
-                            ),
+                        DeviceDescriptor.fromScannedPayload(
+                          DeviceContract.testStatusPayload['deviceId']!
+                          as String,
+                          barcode: false,
+                        ),
+                      ),
                       icon: const Icon(Icons.science),
                       label: const Text('Use demo gateway'),
                     ),
@@ -478,18 +502,18 @@ class _WifiDiscoverySheetState extends State<_WifiDiscoverySheet> {
                   children: gateways
                       .map(
                         (gateway) => Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.router),
-                            title: Text(gateway.descriptor.deviceId),
-                            subtitle: Text(
-                              '${gateway.descriptor.ip}:${gateway.descriptor.port} • ${gateway.batteryCount ?? '?'} batteries',
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () =>
-                                Navigator.pop(context, gateway.descriptor),
-                          ),
+                      child: ListTile(
+                        leading: const Icon(Icons.router),
+                        title: Text(gateway.descriptor.deviceId),
+                        subtitle: Text(
+                          '${gateway.descriptor.ip}:${gateway.descriptor.port} • ${gateway.batteryCount ?? '?'} batteries',
                         ),
-                      )
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () =>
+                            Navigator.pop(context, gateway.descriptor),
+                      ),
+                    ),
+                  )
                       .toList(),
                 );
               },

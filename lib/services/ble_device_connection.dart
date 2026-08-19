@@ -33,24 +33,39 @@ class BleDeviceConnection implements app.DeviceConnection {
   Future<bool> connect() async {
     _stateController.add(app.ConnectionState.connecting);
     try {
-      await FlutterBluePlus.stopScan();
-      await FlutterBluePlus.startScan(
-        withServices: [Guid(descriptor.serviceUuid!)],
-        timeout: AppConfig.connectionTimeout,
-      );
-      final result = await FlutterBluePlus.scanResults
-          .expand((results) => results)
-          .firstWhere((result) {
-            final advertisedName = result.advertisementData.advName;
+      // A BLE peripheral in deep sleep only listens during its own periodic
+      // advertising bursts — the phone cannot push a wake signal to it.
+      // The best available option is to keep re-scanning until the device's
+      // next advertising window is caught, or the retry budget runs out.
+      final deadline = DateTime.now().add(AppConfig.bleWakeRetryWindow);
+      ScanResult? result;
+      while (result == null && DateTime.now().isBefore(deadline)) {
+        await FlutterBluePlus.stopScan();
+        await FlutterBluePlus.startScan(
+          withServices: [Guid(descriptor.serviceUuid!)],
+          timeout: AppConfig.connectionTimeout,
+        );
+        try {
+          result = await FlutterBluePlus.scanResults
+              .expand((results) => results)
+              .firstWhere((r) {
+            final advertisedName = r.advertisementData.advName;
             final expectedName = descriptor.advertisingName;
             return expectedName != null && advertisedName == expectedName;
           })
-          .timeout(
-            AppConfig.connectionTimeout,
-            onTimeout: () =>
-                throw TimeoutException('Device not found after 10 seconds.'),
-          );
+              .timeout(AppConfig.connectionTimeout);
+        } on TimeoutException {
+          // No advertisement seen this pass — loop again if time remains.
+        }
+      }
       await FlutterBluePlus.stopScan();
+      if (result == null) {
+        throw TimeoutException(
+          'Device did not advertise within '
+              '${AppConfig.bleWakeRetryWindow.inSeconds}s. It may be asleep — '
+              'try again shortly.',
+        );
+      }
       _device = result.device;
       await _device!.connect(timeout: AppConfig.connectionTimeout);
       _connectionSubscription = _device!.connectionState.listen((state) {
@@ -62,7 +77,7 @@ class BleDeviceConnection implements app.DeviceConnection {
       });
       final services = await _device!.discoverServices();
       final service = services.firstWhere(
-        (item) => item.uuid == Guid(descriptor.serviceUuid!),
+            (item) => item.uuid == Guid(descriptor.serviceUuid!),
       );
       for (final characteristic in service.characteristics) {
         if (_readCharacteristic == null &&
@@ -135,8 +150,8 @@ class BleDeviceConnection implements app.DeviceConnection {
       withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse,
     );
     final payload =
-        jsonDecode(utf8.decode(await _readCharacteristic!.read()))
-            as Map<String, dynamic>;
+    jsonDecode(utf8.decode(await _readCharacteristic!.read()))
+    as Map<String, dynamic>;
     final count = payload['batteryCount'] ?? payload['value'];
     if (count is! num || count < 0) {
       throw const FormatException('Invalid battery count response.');

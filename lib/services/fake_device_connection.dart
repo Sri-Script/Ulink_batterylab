@@ -14,6 +14,9 @@ class FakeDeviceConnection implements DeviceConnection {
     'zero': 0,
     'reference': 12.5,
     'timestamped': 10.0,
+    'clock': DateTime.now().toIso8601String(),
+    'voltage': 3.7,
+    'telemetry': 12.0,
   };
   bool _connected = false;
 
@@ -51,6 +54,11 @@ class FakeDeviceConnection implements DeviceConnection {
   Future<CalibrationReading> read(String key) async {
     _ensureConnected();
     await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (key == 'telemetry') {
+      // Small jitter so polling looks alive in demo mode.
+      final jitter = (DateTime.now().millisecondsSinceEpoch % 200 - 100) / 100;
+      _values['telemetry'] = (_values['telemetry'] as double) + jitter;
+    }
     return CalibrationReading(
       key: key,
       value: _values[key] ?? 0,

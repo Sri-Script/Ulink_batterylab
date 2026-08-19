@@ -1,17 +1,22 @@
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-enum WifiDiscoveryMode { mdns, softAp }
+enum WifiDiscoveryMode { mdns, softAp, broadcast }
 
 /// Temporary firmware/label contract. Replace values in this file only when
 /// the production ESP32 contract is finalized.
 class DeviceContract {
   const DeviceContract._();
 
-  static const WifiDiscoveryMode kWifiDiscoveryMode = WifiDiscoveryMode.mdns;
+  static const WifiDiscoveryMode kWifiDiscoveryMode =
+      WifiDiscoveryMode.broadcast;
   static const String mdnsServiceName = '_ulink._tcp.local';
   static const String wifiSsidPrefix = 'ULINK-';
   static const String defaultBleServiceUuid =
       '0000181a-0000-1000-8000-00805f9b34fb';
+
+  // Broadcast discovery — placeholder port/message until firmware confirms.
+  static const int broadcastDiscoveryPort = 47890;
+  static const String broadcastDiscoveryMessage = 'ULINK_DISCOVER';
 
   static const List<BarcodeFormat> qrFormats = [BarcodeFormat.qrCode];
   static const List<BarcodeFormat> barcodeFormats = [BarcodeFormat.code128];

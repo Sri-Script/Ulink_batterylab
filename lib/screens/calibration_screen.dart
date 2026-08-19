@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/calibration_log_entry.dart';
+import '../models/calibration_reading.dart';
 import '../models/device_descriptor.dart';
 import '../providers/connection_controller.dart';
 import '../services/device_connection.dart' as device;
@@ -19,6 +22,13 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   final Map<String, String> _lastValues = {};
   int _historyVersion = 0;
 
+  bool _polling = false;
+  bool _uploading = false;
+  Timer? _pollTimer;
+  final List<CalibrationReading> _polledReadings = [];
+
+  static const _pollInterval = Duration(seconds: 5);
+
   Future<void> _read(String key) async {
     setState(() => _busy.add(key));
     try {
@@ -28,7 +38,14 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         _lastValues[key] = reading.value?.toString() ?? 'null';
         _historyVersion++;
       });
-      _message('Read $key successfully.');
+      if (key == 'clock') {
+        _message(
+          'Device time: ${reading.value} • Phone time: '
+              '${DateTime.now().toIso8601String()}',
+        );
+      } else {
+        _message('Read $key successfully.');
+      }
     } catch (error) {
       if (mounted) {
         setState(() => _historyVersion++);
@@ -40,10 +57,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _write(
-    String key, {
-    required bool timestamped,
-    dynamic fixedValue,
-  }) async {
+      String key, {
+        required bool timestamped,
+        dynamic fixedValue,
+      }) async {
     dynamic value = fixedValue;
     if (value == null) {
       value = await _askValue(key);
@@ -80,12 +97,15 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
   Future<double?> _askValue(String key) async {
     final textController = TextEditingController();
+    final title = switch (key) {
+      'reference' => 'Set reference point',
+      'voltage' => 'Set voltage',
+      _ => 'Calibration value',
+    };
     final value = await showDialog<double>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(
-          key == 'reference' ? 'Set reference point' : 'Calibration value',
-        ),
+        title: Text(title),
         content: TextField(
           controller: textController,
           autofocus: true,
@@ -136,8 +156,62 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
 
   Future<void> _disconnect() async {
+    _stopPolling();
     await context.read<ConnectionController>().disconnect();
     if (mounted) Navigator.pop(context);
+  }
+
+  void _startPolling() {
+    if (_polling) return;
+    setState(() => _polling = true);
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _pollOnce());
+    _pollOnce();
+  }
+
+  Future<void> _pollOnce() async {
+    if (!mounted) return;
+    final controller = context.read<ConnectionController>();
+    if (controller.connectionState != device.ConnectionState.connected) {
+      _stopPolling(reason: 'Device disconnected — polling stopped.');
+      return;
+    }
+    try {
+      final reading = await controller.read('telemetry');
+      if (!mounted) return;
+      setState(() => _polledReadings.insert(0, reading));
+    } catch (_) {
+      _stopPolling(reason: 'Read failed — polling stopped.');
+    }
+  }
+
+  void _stopPolling({String? reason}) {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    if (!mounted) return;
+    setState(() => _polling = false);
+    if (reason != null) _message(reason, error: true);
+  }
+
+  Future<void> _upload() async {
+    if (_polledReadings.isEmpty) {
+      _message('No readings to upload yet.');
+      return;
+    }
+    setState(() => _uploading = true);
+    try {
+      // TODO: replace with real upload endpoint — currently a local no-op stub.
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      if (!mounted) return;
+      _message('Uploaded ${_polledReadings.length} readings.');
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -149,8 +223,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         body: Center(child: Text('No device is connected.')),
       );
     }
+    final connected =
+        controller.connectionState == device.ConnectionState.connected;
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         appBar: AppBar(
           titleSpacing: 16,
@@ -199,16 +275,15 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
           bottom: const TabBar(
             tabs: [
               Tab(icon: Icon(Icons.tune), text: 'Calibration'),
+              Tab(icon: Icon(Icons.podcasts), text: 'Live Data'),
               Tab(icon: Icon(Icons.history), text: 'History'),
             ],
           ),
         ),
         body: TabBarView(
           children: [
-            _actions(
-              controller.connectionState == device.ConnectionState.connected,
-              controller.batteryCount,
-            ),
+            _actions(connected, controller.batteryCount),
+            _liveData(connected),
             _HistoryView(
               key: ValueKey(_historyVersion),
               load: controller.history,
@@ -266,6 +341,36 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
               ? () => _write('timestamped', timestamped: true)
               : () => _message('Device is disconnected.', error: true),
         ),
+        CalibrationActionCard(
+          title: 'Clock Settings',
+          subtitle: 'Read the device clock or sync it to this phone.',
+          icon: Icons.access_time,
+          busy: _busy.contains('clock'),
+          lastValue: _lastValues['clock'],
+          onRead: connected
+              ? () => _read('clock')
+              : () => _message('Device is disconnected.', error: true),
+          onWrite: connected
+              ? () => _write(
+            'clock',
+            timestamped: false,
+            fixedValue: DateTime.now().toIso8601String(),
+          )
+              : () => _message('Device is disconnected.', error: true),
+        ),
+        CalibrationActionCard(
+          title: 'Voltage Setting',
+          subtitle: 'Read or set the voltage calibration value.',
+          icon: Icons.bolt,
+          busy: _busy.contains('voltage'),
+          lastValue: _lastValues['voltage'],
+          onRead: connected
+              ? () => _read('voltage')
+              : () => _message('Device is disconnected.', error: true),
+          onWrite: connected
+              ? () => _write('voltage', timestamped: false)
+              : () => _message('Device is disconnected.', error: true),
+        ),
       ];
       return Column(
         children: [
@@ -312,6 +417,58 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       );
     },
   );
+
+  Widget _liveData(bool connected) => Column(
+    children: [
+      Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: connected
+                    ? (_polling ? _stopPolling : _startPolling)
+                    : null,
+                icon: Icon(_polling ? Icons.stop_circle : Icons.play_circle),
+                label: Text(_polling ? 'Stop Polling' : 'Start Polling'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _uploading ? null : _upload,
+                icon: _uploading
+                    ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+                    : const Icon(Icons.cloud_upload),
+                label: Text(_uploading ? 'Uploading...' : 'Upload'),
+              ),
+            ),
+          ],
+        ),
+      ),
+      Expanded(
+        child: _polledReadings.isEmpty
+            ? const Center(child: Text('No readings yet — start polling.'))
+            : ListView.separated(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: _polledReadings.length,
+          separatorBuilder: (_, _) => const Divider(height: 1),
+          itemBuilder: (context, index) {
+            final reading = _polledReadings[index];
+            return ListTile(
+              leading: const Icon(Icons.show_chart),
+              title: Text(reading.value.toString()),
+              subtitle: Text(reading.timestamp.toLocal().toString()),
+            );
+          },
+        ),
+      ),
+    ],
+  );
 }
 
 class _HistoryView extends StatefulWidget {
@@ -331,8 +488,8 @@ class _HistoryViewState extends State<_HistoryView> {
 
   @override
   Widget build(
-    BuildContext context,
-  ) => FutureBuilder<List<CalibrationLogEntry>>(
+      BuildContext context,
+      ) => FutureBuilder<List<CalibrationLogEntry>>(
     future: _entries,
     builder: (context, snapshot) {
       if (snapshot.connectionState == ConnectionState.waiting) {
