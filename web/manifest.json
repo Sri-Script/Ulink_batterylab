@@ -1,0 +1,35 @@
+{
+    "name": "ulink_batterylab",
+    "short_name": "ulink_batterylab",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#0175C2",
+    "theme_color": "#0175C2",
+    "description": "a Flutter app with a scanner-first onboarding flow that auto-connects to one specific ESP32 (via BLE or Wi‑Fi, whichever the QR encodes), then a calibration dashboard with read/write actions logged against a timestamp — basically the same pattern as your Ulink IoT app, but device-locked by QR instead of a manual picker.",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
