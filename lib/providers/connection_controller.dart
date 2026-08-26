@@ -32,8 +32,10 @@ class ConnectionController extends ChangeNotifier {
   String? errorMessage;
   bool connecting = false;
   int? batteryCount;
+  Map<String, dynamic>? _liveStatus;
 
   device.DeviceConnection? get connection => _connection;
+  Map<String, dynamic>? get liveStatus => _liveStatus;
 
   Future<bool> requestCameraPermission() => _permissions.requestCamera();
 
@@ -48,6 +50,7 @@ class ConnectionController extends ChangeNotifier {
   }) async {
     errorMessage = null;
     batteryCount = null;
+    _liveStatus = null;
     connecting = true;
     connectionState = reconnect
         ? device.ConnectionState.reconnecting
@@ -73,6 +76,11 @@ class ConnectionController extends ChangeNotifier {
       descriptor = target;
       lastDevice = target;
       try {
+        _liveStatus = await candidate.getLiveStatus();
+      } catch (_) {
+        _liveStatus = null;
+      }
+      try {
         batteryCount = await candidate.getBatteryCount();
       } catch (_) {
         batteryCount = null;
@@ -95,6 +103,7 @@ class ConnectionController extends ChangeNotifier {
     _connection = null;
     descriptor = null;
     batteryCount = null;
+    _liveStatus = null;
     connectionState = device.ConnectionState.disconnected;
     notifyListeners();
   }
@@ -134,6 +143,13 @@ class ConnectionController extends ChangeNotifier {
   Future<List<CalibrationLogEntry>> history() async {
     final id = descriptor?.deviceId ?? lastDevice?.deviceId;
     return id == null ? [] : _database.entriesFor(id);
+  }
+
+  Future<Map<String, dynamic>> refreshLiveStatus() async {
+    final status = await _requireConnection().getLiveStatus();
+    _liveStatus = status;
+    notifyListeners();
+    return status;
   }
 
   device.DeviceConnection _requireConnection() {

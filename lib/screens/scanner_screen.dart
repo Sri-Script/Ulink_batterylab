@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
@@ -11,6 +12,9 @@ import '../providers/connection_controller.dart';
 import '../services/wifi_gateway_discovery.dart';
 import '../widgets/scan_frame_overlay.dart';
 import 'calibration_screen.dart';
+import 'live_data_viewer_screen.dart';
+import 'login_screen.dart';
+import 'programmer_home_screen.dart';
 
 enum ScanMode { qr, barcode }
 
@@ -203,6 +207,27 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
+  Future<void> _openLiveData() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => user == null
+              ? const LoginScreen()
+              : const LiveDataViewerScreen(),
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        _showFeedback(
+          'Firebase is unavailable. Check the app configuration and try again.',
+          error: true,
+        );
+      }
+    }
+  }
+
   @override
   void dispose() {
     _scanner.dispose();
@@ -373,6 +398,24 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       icon: const Icon(Icons.wifi_find),
                       label: const Text('Discover via Wi-Fi instead'),
                     ),
+                  const SizedBox(height: 6),
+                  OutlinedButton.icon(
+                    onPressed: _handlingScan
+                        ? null
+                        : () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const ProgrammerHomeScreen(),
+                            ),
+                          ),
+                    icon: const Icon(Icons.settings_input_antenna),
+                    label: const Text('Program a Device'),
+                  ),
+                  const SizedBox(height: 6),
+                  OutlinedButton.icon(
+                    onPressed: _openLiveData,
+                    icon: const Icon(Icons.cloud_outlined),
+                    label: const Text('View Live Data'),
+                  ),
                   if (AppConfig.demoMode) ...[
                     const SizedBox(height: 6),
                     TextButton.icon(

@@ -82,4 +82,19 @@ class FakeDeviceConnection implements DeviceConnection {
     await Future<void>.delayed(const Duration(milliseconds: 250));
     return DeviceContract.testStatusPayload['batteryCount']! as int;
   }
+
+  @override
+  Future<Map<String, dynamic>> getLiveStatus() async {
+    _ensureConnected();
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    return {
+      'mesh': DeviceContract.fakeGatewayIsMesh,
+      'gatewayId': gatewayId,
+      'devices': [
+        {'id': 'batt-1', 'live': true, 'voltage': 3.71},
+        {'id': 'batt-2', 'live': false, 'voltage': null},
+        {'id': 'batt-3', 'live': true, 'voltage': 3.68},
+      ],
+    };
+  }
 }

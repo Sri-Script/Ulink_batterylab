@@ -143,4 +143,27 @@ class WifiDeviceConnection implements DeviceConnection {
     }
     return count.toInt();
   }
+
+  @override
+  Future<Map<String, dynamic>> getLiveStatus() async {
+    try {
+      final response = await _client
+          .get(_uri('/status'))
+          .timeout(AppConfig.connectionTimeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw StateError('Gateway live status is unavailable.');
+      }
+      final status = jsonDecode(response.body);
+      if (status is! Map<String, dynamic> ||
+          status['deviceId']?.toString() != descriptor.deviceId ||
+          status['devices'] is! List) {
+        throw const FormatException('Invalid live status response.');
+      }
+      _status = status;
+      return status;
+    } catch (_) {
+      _stateController.add(ConnectionState.disconnected);
+      rethrow;
+    }
+  }
 }

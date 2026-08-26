@@ -43,4 +43,7 @@ class DeviceContract {
     'bleMac': 'AA:BB:CC:DD:EE:FF',
     'firmwareVersion': '0.0.0-test',
   };
+
+  /// Toggle this in demo builds to exercise mesh and point-to-point UI flows.
+  static const bool fakeGatewayIsMesh = true;
 }

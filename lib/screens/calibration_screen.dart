@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -23,6 +25,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   int _historyVersion = 0;
 
   bool _polling = false;
+  bool _checkingLiveDevices = false;
   bool _uploading = false;
   Timer? _pollTimer;
   final List<CalibrationReading> _polledReadings = [];
@@ -168,6 +171,17 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     _pollOnce();
   }
 
+  Future<void> _checkLiveDevices() async {
+    setState(() => _checkingLiveDevices = true);
+    try {
+      await context.read<ConnectionController>().refreshLiveStatus();
+    } catch (error) {
+      if (mounted) _message(_clean(error), error: true);
+    } finally {
+      if (mounted) setState(() => _checkingLiveDevices = false);
+    }
+  }
+
   Future<void> _pollOnce() async {
     if (!mounted) return;
     final controller = context.read<ConnectionController>();
@@ -193,16 +207,71 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _upload() async {
-    if (_polledReadings.isEmpty) {
+    final controller = context.read<ConnectionController>();
+    final isMesh = controller.liveStatus?['mesh'] == true;
+    final liveStatus = controller.liveStatus;
+    if (isMesh && liveStatus == null) {
+      _message('No live device status is available to upload.', error: true);
+      return;
+    }
+    if (!isMesh && _polledReadings.isEmpty) {
       _message('No readings to upload yet.');
       return;
     }
     setState(() => _uploading = true);
     try {
-      // TODO: replace with real upload endpoint — currently a local no-op stub.
-      await Future<void>.delayed(const Duration(milliseconds: 700));
+      if (Firebase.apps.isEmpty) {
+        throw StateError(
+          'Firebase is not initialized. Check google-services.json and rebuild the app.',
+        );
+      }
+      final deviceId =
+          controller.connection?.deviceId ?? controller.descriptor?.deviceId;
+      if (deviceId == null) throw StateError('Device is disconnected.');
+
+      final firestore = FirebaseFirestore.instance;
+      final device = firestore.collection('devices').doc(deviceId);
+      if (isMesh) {
+        await device.set({
+          'deviceId': deviceId,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        await device
+            .collection('live_status_snapshots')
+            .add({
+              ...liveStatus!,
+              'uploadedAt': FieldValue.serverTimestamp(),
+            });
+      } else {
+        final batch = firestore.batch();
+        batch.set(device, {
+          'deviceId': deviceId,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        final telemetry = device.collection('telemetry');
+        for (final reading in _polledReadings) {
+          batch.set(telemetry.doc(), {
+            'key': reading.key,
+            'value': reading.value,
+            'timestamp': Timestamp.fromDate(reading.timestamp),
+            'uploadedAt': FieldValue.serverTimestamp(),
+          });
+        }
+        await batch.commit();
+      }
       if (!mounted) return;
-      _message('Uploaded ${_polledReadings.length} readings.');
+      _message(
+        isMesh
+            ? 'Uploaded live device status snapshot.'
+            : 'Uploaded ${_polledReadings.length} readings.',
+      );
+    } catch (error) {
+      if (mounted) {
+        _message(
+          'Upload failed. Check Firebase setup and Firestore rules: ${_clean(error)}',
+          error: true,
+        );
+      }
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -283,7 +352,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         body: TabBarView(
           children: [
             _actions(connected, controller.batteryCount),
-            _liveData(connected),
+            _liveData(connected, controller),
             _HistoryView(
               key: ValueKey(_historyVersion),
               load: controller.history,
@@ -418,7 +487,87 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     },
   );
 
-  Widget _liveData(bool connected) => Column(
+  Widget _liveData(bool connected, ConnectionController controller) {
+    final liveStatus = controller.liveStatus;
+    final isMesh = liveStatus?['mesh'] == true;
+    final devices = (liveStatus?['devices'] as List?) ?? const [];
+
+    // Mesh polls traverse sibling nodes, so use one on-demand bulk fetch.
+    if (isMesh) {
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: connected && !_checkingLiveDevices
+                        ? _checkLiveDevices
+                        : null,
+                    icon: _checkingLiveDevices
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.devices),
+                    label: Text(
+                      _checkingLiveDevices
+                          ? 'Checking...'
+                          : 'Check Live Devices',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _uploading ? null : _upload,
+                    icon: _uploading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cloud_upload),
+                    label: Text(_uploading ? 'Uploading...' : 'Upload'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: devices.isEmpty
+                ? const Center(child: Text('No live devices reported.'))
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: devices.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final item = devices[index] as Map?;
+                      final live = item?['live'] == true;
+                      final voltage = item?['voltage'];
+                      return ListTile(
+                        leading: Icon(
+                          live ? Icons.check_circle : Icons.cancel,
+                          color: live
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.error,
+                        ),
+                        title: Text(item?['id']?.toString() ?? 'Unknown device'),
+                        subtitle: Text(
+                          '${live ? 'Live' : 'Offline'} • Voltage: '
+                          '${voltage == null ? 'Unavailable' : '${voltage} V'}',
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
     children: [
       Padding(
         padding: const EdgeInsets.all(16),
@@ -469,6 +618,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       ),
     ],
   );
+  }
 }
 
 class _HistoryView extends StatefulWidget {

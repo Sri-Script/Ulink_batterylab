@@ -14,4 +14,5 @@ abstract class DeviceConnection {
   Future<CalibrationReading> read(String key);
   Future<bool> write(String key, dynamic value, {DateTime? timestamp});
   Future<int> getBatteryCount();
+  Future<Map<String, dynamic>> getLiveStatus();
 }

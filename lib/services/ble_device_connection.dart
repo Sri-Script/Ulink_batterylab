@@ -159,6 +159,20 @@ class BleDeviceConnection implements app.DeviceConnection {
     return count.toInt();
   }
 
+  @override
+  Future<Map<String, dynamic>> getLiveStatus() async {
+    _ensureReady();
+    await _writeCharacteristic!.write(
+      utf8.encode(jsonEncode({'key': 'liveStatus', 'gatewayId': gatewayId})),
+      withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse,
+    );
+    final payload = jsonDecode(utf8.decode(await _readCharacteristic!.read()));
+    if (payload is! Map<String, dynamic> || payload['devices'] is! List) {
+      throw const FormatException('Invalid live status response.');
+    }
+    return payload;
+  }
+
   void _ensureReady() {
     if (_device == null ||
         _readCharacteristic == null ||

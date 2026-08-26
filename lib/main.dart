@@ -1,11 +1,17 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/connection_controller.dart';
 import 'screens/scanner_screen.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {
+    // Firestore uploads show a retryable setup error if initialization fails.
+  }
   runApp(const BatteryLabApp());
 }
 
@@ -16,7 +22,7 @@ class BatteryLabApp extends StatelessWidget {
   Widget build(BuildContext context) => ChangeNotifierProvider(
     create: (_) => ConnectionController(),
     child: MaterialApp(
-      title: 'Ulink BatteryLab',
+      title: 'Ulink Programmer',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
