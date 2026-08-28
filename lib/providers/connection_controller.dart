@@ -39,6 +39,8 @@ class ConnectionController extends ChangeNotifier {
 
   Future<bool> requestCameraPermission() => _permissions.requestCamera();
 
+  Future<bool> requestBle() => _permissions.requestBle();
+
   Future<void> initialize() async {
     lastDevice = await _preferences.loadLast();
     notifyListeners();

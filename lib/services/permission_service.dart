@@ -22,4 +22,9 @@ class PermissionService {
     await Permission.locationWhenInUse.request();
     return statuses.values.every((status) => status.isGranted);
   }
+
+  Future<bool> requestNotifications() async {
+    if (!Platform.isAndroid) return true;
+    return (await Permission.notification.request()).isGranted;
+  }
 }

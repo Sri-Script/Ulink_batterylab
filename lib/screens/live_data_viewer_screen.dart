@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../config/app_config.dart';
+
 class LiveDataViewerScreen extends StatelessWidget {
   const LiveDataViewerScreen({super.key});
 
@@ -10,11 +12,35 @@ class LiveDataViewerScreen extends StatelessWidget {
     if (context.mounted) Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
+  Future<void> _simulateEsp32Data(BuildContext context) async {
+    final value = 3.55 + (DateTime.now().millisecond / 1000 * .15);
+    await FirebaseFirestore.instance
+        .collection('devices')
+        .doc('ULINK-GW-TEST01')
+        .collection('telemetry')
+        .add({
+          'key': 'battery_voltage',
+          'value': double.parse(value.toStringAsFixed(2)),
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Simulated ESP32 telemetry uploaded.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: const Text('Live Device Data'),
       actions: [
+        if (AppConfig.demoMode)
+          IconButton(
+            onPressed: () => _simulateEsp32Data(context),
+            tooltip: 'Simulate ESP32 Data',
+            icon: const Icon(Icons.science),
+          ),
         IconButton(
           onPressed: () => _logout(context),
           tooltip: 'Logout',

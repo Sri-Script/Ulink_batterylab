@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 
 import 'providers/connection_controller.dart';
 import 'screens/scanner_screen.dart';
+import 'services/app_telemetry_notification_controller.dart';
+import 'services/local_notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,11 +14,31 @@ Future<void> main() async {
   } catch (_) {
     // Firestore uploads show a retryable setup error if initialization fails.
   }
+  await LocalNotificationService.instance.initialize();
   runApp(const BatteryLabApp());
 }
 
-class BatteryLabApp extends StatelessWidget {
+class BatteryLabApp extends StatefulWidget {
   const BatteryLabApp({super.key});
+
+  @override
+  State<BatteryLabApp> createState() => _BatteryLabAppState();
+}
+
+class _BatteryLabAppState extends State<BatteryLabApp> {
+  final _telemetryNotifications = AppTelemetryNotificationController();
+
+  @override
+  void initState() {
+    super.initState();
+    _telemetryNotifications.start();
+  }
+
+  @override
+  void dispose() {
+    _telemetryNotifications.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => ChangeNotifierProvider(
