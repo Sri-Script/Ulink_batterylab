@@ -15,12 +15,16 @@ class PermissionService {
     final statuses = await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
+      // Android 11 and earlier uses location for BLE discovery. It is capped
+      // in the manifest, so Android 12+ ignores this legacy request.
+      Permission.locationWhenInUse,
     ].request();
-    // Android 11 and earlier require location at runtime for BLE discovery.
-    // The manifest caps this permission at API 30, so newer Android versions
-    // do not receive an unnecessary location grant.
-    await Permission.locationWhenInUse.request();
-    return statuses.values.every((status) => status.isGranted);
+    final modernGranted =
+        statuses[Permission.bluetoothScan]?.isGranted == true &&
+        statuses[Permission.bluetoothConnect]?.isGranted == true;
+    final legacyGranted =
+        statuses[Permission.locationWhenInUse]?.isGranted == true;
+    return modernGranted || legacyGranted;
   }
 
   Future<bool> requestNotifications() async {

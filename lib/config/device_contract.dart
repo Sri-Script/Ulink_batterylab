@@ -27,7 +27,62 @@ class DeviceContract {
     r'^(?:ULINK-[A-Z0-9]{4,10}|ULINK-GW-[A-Z0-9]{4,10})$',
   );
 
-  static const String advertisingNamePrefix = 'ULINK-GW-';
+  /// BLE advertising-name prefixes observed in real deployments.
+  ///
+  /// `UBM-Node1` is one confirmed real device name. It is not evidence that
+  /// every UBM device will use the `UBM-` prefix; confirm the enduring naming
+  /// contract with the firmware team before treating this list as final.
+  static const List<String> advertisingNamePrefixes = [
+    'ULINK-GW-',
+    'UBM-',
+  ];
+
+  /// Retained for callers that need the canonical Ulink gateway label.
+  //static const String advertisingNamePrefix = advertisingNamePrefixes.first;
+  static final String advertisingNamePrefix = advertisingNamePrefixes.first;
+
+  /// Matches BLE results in Dart instead of relying on Android's native
+  /// service filter, which can miss UUIDs placed in the scan response.
+  static bool matchesBleAdvertisement({
+    required String advertisedName,
+    required Iterable<String> serviceUuids,
+    String? expectedAdvertisingName,
+    String? advertisedBleDeviceId,
+    String? expectedBleDeviceId,
+  }) {
+    final matchesService = serviceUuids.any(
+      (uuid) => uuid.toLowerCase() == defaultBleServiceUuid.toLowerCase(),
+    );
+    final matchesName = matchesAdvertisingName(
+      advertisedName,
+      expectedAdvertisingName: expectedAdvertisingName,
+    );
+    final matchesBleDeviceId = expectedBleDeviceId != null &&
+        advertisedBleDeviceId != null &&
+        _normalizeBleDeviceId(expectedBleDeviceId) ==
+            _normalizeBleDeviceId(advertisedBleDeviceId);
+
+    // Keep service-UUID matching unchanged while allowing a known BLE device
+    // ID (a MAC address on Android) to identify a QR-targeted peripheral.
+    return matchesService || matchesName || matchesBleDeviceId;
+  }
+
+  /// Name-only identity check for passive discovery, where no specific
+  /// peripheral identity is known yet.
+  static bool matchesAdvertisingName(
+    String advertisedName, {
+    String? expectedAdvertisingName,
+  }) {
+    final normalizedName = advertisedName.toLowerCase();
+    return expectedAdvertisingName == null
+        ? advertisingNamePrefixes.any(
+            (prefix) => normalizedName.startsWith(prefix.toLowerCase()),
+          )
+        : normalizedName == expectedAdvertisingName.toLowerCase();
+  }
+
+  static String _normalizeBleDeviceId(String value) =>
+      value.trim().replaceAll('-', ':').toUpperCase();
 
   /// Example: ULINK-GW1234 -> ULINK-GW-GW1234.
   static String advertisingNameFor(String deviceId) {

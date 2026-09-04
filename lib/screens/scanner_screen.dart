@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
@@ -19,7 +20,9 @@ import 'programmer_home_screen.dart';
 enum ScanMode { qr, barcode }
 
 class ScannerScreen extends StatefulWidget {
-  const ScannerScreen({super.key});
+  const ScannerScreen({super.key, this.bluetoothNeedsAttention = false});
+
+  final bool bluetoothNeedsAttention;
   @override
   State<ScannerScreen> createState() => _ScannerScreenState();
 }
@@ -32,6 +35,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String? _feedback;
   bool _feedbackIsError = false;
   DeviceDescriptor? _validatedBarcode;
+  late bool _bluetoothNeedsAttention;
+  bool _checkingBluetooth = false;
 
   MobileScannerController _newScanner() => MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
@@ -43,6 +48,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   @override
   void initState() {
     super.initState();
+    _bluetoothNeedsAttention = widget.bluetoothNeedsAttention;
     WidgetsBinding.instance.addPostFrameCallback((_) => _prepare());
   }
 
@@ -128,6 +134,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
         bool reconnect = false,
       }) async {
     final controller = context.read<ConnectionController>();
+    if (descriptor.mode == TransportType.ble && !await _isBluetoothReady()) {
+      return;
+    }
     setState(() {
       _handlingScan = true;
       _feedback = descriptor.mode == TransportType.ble
@@ -156,6 +165,59 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _validatedBarcode = null;
       });
       if (_cameraAllowed) await _scanner.start();
+    }
+  }
+
+  Future<bool> _isBluetoothReady() async {
+    if (AppConfig.demoMode) return true;
+    try {
+      final ready =
+          FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on;
+      if (mounted) setState(() => _bluetoothNeedsAttention = !ready);
+      if (!ready) {
+        _showFeedback(
+          'Bluetooth needs to be enabled before connecting to a BLE gateway.',
+          error: true,
+        );
+      }
+      return ready;
+    } catch (_) {
+      if (mounted) setState(() => _bluetoothNeedsAttention = true);
+      _showFeedback(
+        'Bluetooth needs to be enabled before connecting to a BLE gateway.',
+        error: true,
+      );
+      return false;
+    }
+  }
+
+  Future<void> _retryBluetooth() async {
+    if (_checkingBluetooth || AppConfig.demoMode) return;
+    setState(() => _checkingBluetooth = true);
+    try {
+      if (FlutterBluePlus.adapterStateNow == BluetoothAdapterState.off) {
+        await FlutterBluePlus.turnOn();
+      }
+      final ready =
+          FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on;
+      if (!mounted) return;
+      setState(() {
+        _bluetoothNeedsAttention = !ready;
+        _feedback = ready
+            ? 'Bluetooth is enabled. BLE features are ready to use.'
+            : 'Bluetooth is still off. Enable it to use BLE features.';
+        _feedbackIsError = !ready;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _bluetoothNeedsAttention = true;
+          _feedback = 'Bluetooth needs to be enabled for BLE features to work.';
+          _feedbackIsError = true;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _checkingBluetooth = false);
     }
   }
 
@@ -269,6 +331,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     selected: {_mode},
                     onSelectionChanged: (value) => _changeMode(value.first),
                   ),
+                  if (_bluetoothNeedsAttention) ...[
+                    const SizedBox(height: 10),
+                    _BluetoothRequiredMessage(
+                      checking: _checkingBluetooth,
+                      onRetry: _retryBluetooth,
+                    ),
+                  ],
                   if (controller.lastDevice case final last?) ...[
                     const SizedBox(height: 10),
                     OutlinedButton.icon(
@@ -629,6 +698,44 @@ class _PermissionMessage extends StatelessWidget {
           ],
         ),
       ),
+    ),
+  );
+}
+
+class _BluetoothRequiredMessage extends StatelessWidget {
+  const _BluetoothRequiredMessage({
+    required this.checking,
+    required this.onRetry,
+  });
+
+  final bool checking;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.errorContainer,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      children: [
+        Icon(
+          Icons.bluetooth_disabled,
+          color: Theme.of(context).colorScheme.onErrorContainer,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Bluetooth needs to be enabled for BLE features to work.',
+            style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+          ),
+        ),
+        TextButton(
+          onPressed: checking ? null : onRetry,
+          child: Text(checking ? 'Checking...' : 'Retry'),
+        ),
+      ],
     ),
   );
 }

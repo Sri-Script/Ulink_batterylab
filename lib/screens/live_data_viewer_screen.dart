@@ -13,19 +13,45 @@ class LiveDataViewerScreen extends StatelessWidget {
   }
 
   Future<void> _simulateEsp32Data(BuildContext context) async {
-    final value = 3.55 + (DateTime.now().millisecond / 1000 * .15);
+    final variation = DateTime.now().millisecond / 1000;
     await FirebaseFirestore.instance
         .collection('devices')
         .doc('ULINK-GW-TEST01')
         .collection('telemetry')
         .add({
-          'key': 'battery_voltage',
-          'value': double.parse(value.toStringAsFixed(2)),
+          // Mirrors the Ultratech PostRecord device payload: a gateway sends
+          // multiple devices, each with numbered float register values.
+          'devices': [
+            {
+              'deviceId': 'BATT-001',
+              'DeviceParameters': [
+                {'number': 1, 'address': 30001, 'value': 3.72 + variation * .03},
+                {'number': 2, 'address': 30002, 'value': 25.1 + variation},
+                {'number': 3, 'address': 30003, 'value': 82.4 - variation},
+              ],
+            },
+            {
+              'deviceId': 'BATT-002',
+              'DeviceParameters': [
+                {'number': 1, 'address': 30001, 'value': 3.69 + variation * .03},
+                {'number': 2, 'address': 30002, 'value': 24.8 + variation},
+                {'number': 3, 'address': 30003, 'value': 76.9 - variation},
+              ],
+            },
+            {
+              'deviceId': 'BATT-003',
+              'DeviceParameters': [
+                {'number': 1, 'address': 30001, 'value': 3.74 + variation * .03},
+                {'number': 2, 'address': 30002, 'value': 25.4 + variation},
+                {'number': 3, 'address': 30003, 'value': 88.2 - variation},
+              ],
+            },
+          ],
           'timestamp': FieldValue.serverTimestamp(),
         });
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Simulated ESP32 telemetry uploaded.')),
+        const SnackBar(content: Text('Simulated ESP32 device payload uploaded.')),
       );
     }
   }
@@ -103,7 +129,13 @@ class _DeviceDataCard extends StatelessWidget {
                   .orderBy('timestamp', descending: true)
                   .limit(5)
                   .snapshots(),
-              itemBuilder: (data) => '${data['key']}: ${data['value']}',
+              itemBuilder: (data) {
+                final devices = data['devices'];
+                if (devices is List) {
+                  return Text('${devices.length} devices with DeviceParameters');
+                }
+                return Text('${data['key']}: ${data['value']}');
+              },
             ),
             const Divider(),
             _RecentCollection(
@@ -115,7 +147,27 @@ class _DeviceDataCard extends StatelessWidget {
                   .snapshots(),
               itemBuilder: (data) {
                 final devices = data['devices'] as List? ?? const [];
-                return '${data['gatewayId'] ?? deviceId}: ${devices.length} devices';
+                return Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    Text('${data['gatewayId'] ?? deviceId}: ${devices.length} devices'),
+                    ...devices.map((device) {
+                      final live = device is Map && device['live'] == true;
+                      return Tooltip(
+                        message: '${device is Map ? device['id'] ?? 'Unknown device' : 'Unknown device'}: ${live ? 'Live' : 'Offline'}',
+                        child: Icon(
+                          live ? Icons.battery_full : Icons.battery_unknown,
+                          size: 20,
+                          color: live
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).disabledColor,
+                        ),
+                      );
+                    }),
+                  ],
+                );
               },
             ),
           ],
@@ -134,7 +186,7 @@ class _RecentCollection extends StatelessWidget {
 
   final String title;
   final Stream<QuerySnapshot<Map<String, dynamic>>> stream;
-  final String Function(Map<String, dynamic>) itemBuilder;
+  final Widget Function(Map<String, dynamic>) itemBuilder;
 
   @override
   Widget build(BuildContext context) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -151,7 +203,7 @@ class _RecentCollection extends StatelessWidget {
           ...documents.map(
             (document) => Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text(itemBuilder(document.data())),
+              child: itemBuilder(document.data()),
             ),
           ),
         ],

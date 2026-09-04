@@ -32,10 +32,27 @@ class ConnectionController extends ChangeNotifier {
   String? errorMessage;
   bool connecting = false;
   int? batteryCount;
+  int? expectedBatteryCount;
   Map<String, dynamic>? _liveStatus;
 
   device.DeviceConnection? get connection => _connection;
   Map<String, dynamic>? get liveStatus => _liveStatus;
+
+  /// The count reported by the status response. A mesh status is authoritative
+  /// because it lists every battery, including offline ones.
+  int? get reportedBatteryCount {
+    final status = _liveStatus;
+    final count = status?['batteryCount'];
+    if (count is num) return count.toInt();
+    final devices = status?['devices'];
+    if (devices is List) return devices.length;
+    return batteryCount;
+  }
+
+  bool get hasBatteryCountMismatch =>
+      expectedBatteryCount != null &&
+      reportedBatteryCount != null &&
+      expectedBatteryCount != reportedBatteryCount;
 
   Future<bool> requestCameraPermission() => _permissions.requestCamera();
 
@@ -52,6 +69,7 @@ class ConnectionController extends ChangeNotifier {
   }) async {
     errorMessage = null;
     batteryCount = null;
+    expectedBatteryCount = null;
     _liveStatus = null;
     connecting = true;
     connectionState = reconnect
@@ -77,6 +95,9 @@ class ConnectionController extends ChangeNotifier {
       _connection = candidate;
       descriptor = target;
       lastDevice = target;
+      expectedBatteryCount = await _preferences.loadExpectedBatteryCount(
+        candidate.gatewayId,
+      );
       try {
         _liveStatus = await candidate.getLiveStatus();
       } catch (_) {
@@ -105,6 +126,7 @@ class ConnectionController extends ChangeNotifier {
     _connection = null;
     descriptor = null;
     batteryCount = null;
+    expectedBatteryCount = null;
     _liveStatus = null;
     connectionState = device.ConnectionState.disconnected;
     notifyListeners();
@@ -152,6 +174,16 @@ class ConnectionController extends ChangeNotifier {
     _liveStatus = status;
     notifyListeners();
     return status;
+  }
+
+  Future<void> setExpectedBatteryCount(int? count) async {
+    if (count != null && count < 1) {
+      throw ArgumentError.value(count, 'count', 'must be at least 1');
+    }
+    final gatewayId = _requireConnection().gatewayId;
+    await _preferences.saveExpectedBatteryCount(gatewayId, count);
+    expectedBatteryCount = count;
+    notifyListeners();
   }
 
   device.DeviceConnection _requireConnection() {

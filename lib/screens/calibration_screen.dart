@@ -182,6 +182,80 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     }
   }
 
+  Future<void> _configureExpectedBatteryCount(
+    ConnectionController controller,
+  ) async {
+    var enabled = controller.expectedBatteryCount != null;
+    var saved = false;
+    final field = TextEditingController(
+      text: controller.expectedBatteryCount?.toString() ?? '',
+    );
+    final result = await showDialog<int?>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Expected batteries'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Check expected battery count'),
+                value: enabled,
+                onChanged: (value) => setDialogState(() => enabled = value ?? false),
+              ),
+              if (enabled)
+                TextField(
+                  controller: field,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Number of batteries',
+                    helperText: 'A mismatch is shown when live status differs.',
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (!enabled) {
+                  saved = true;
+                  return Navigator.pop(context, null);
+                }
+                final count = int.tryParse(field.text.trim());
+                if (count == null || count < 1) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Enter at least one battery.')),
+                  );
+                  return;
+                }
+                saved = true;
+                Navigator.pop(context, count);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    field.dispose();
+    if (!mounted) return;
+    if (!saved) return;
+    if (result == null) {
+      await controller.setExpectedBatteryCount(null);
+    } else {
+      await controller.setExpectedBatteryCount(result);
+    }
+  }
+
+  IconData _batteryIcon(bool live) =>
+      live ? Icons.battery_full : Icons.battery_unknown;
+
   Future<void> _pollOnce() async {
     if (!mounted) return;
     final controller = context.read<ConnectionController>();
@@ -351,7 +425,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         ),
         body: TabBarView(
           children: [
-            _actions(connected, controller.batteryCount),
+            _actions(connected, controller),
             _liveData(connected, controller),
             _HistoryView(
               key: ValueKey(_historyVersion),
@@ -363,13 +437,18 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     );
   }
 
-  Widget _actions(bool connected, int? batteryCount) => LayoutBuilder(
+  Widget _actions(bool connected, ConnectionController controller) => LayoutBuilder(
     builder: (context, constraints) {
       final columns = constraints.maxWidth >= 720
           ? 3
           : constraints.maxWidth >= 480
           ? 2
           : 1;
+      final liveDevices = (controller.liveStatus?['devices'] as List?) ??
+          const [];
+      final batteryLiveStates = liveDevices.isNotEmpty
+          ? liveDevices.map((item) => item is Map && item['live'] == true)
+          : List<bool>.filled(controller.reportedBatteryCount ?? 0, true);
       final cards = [
         CalibrationActionCard(
           title: 'Zero Calibration',
@@ -453,21 +532,73 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
             ),
             child: Row(
               children: [
-                Icon(
-                  Icons.battery_charging_full,
-                  color: Theme.of(context).colorScheme.primary,
-                  size: 32,
+                Wrap(
+                  spacing: 2,
+                  children: batteryLiveStates
+                      .map(
+                        (live) => Icon(
+                          _batteryIcon(live),
+                          color: live
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).disabledColor,
+                          size: 28,
+                        ),
+                      )
+                      .toList(),
                 ),
-                const SizedBox(width: 12),
+                if (batteryLiveStates.isNotEmpty) const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    batteryCount == null
+                    controller.reportedBatteryCount == null
                         ? 'Battery count unavailable'
-                        : '$batteryCount ${batteryCount == 1 ? 'battery' : 'batteries'} detected',
+                        : '${controller.reportedBatteryCount} ${controller.reportedBatteryCount == 1 ? 'battery' : 'batteries'} reported',
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: controller.expectedBatteryCount == null
+                      ? const Text('No expected battery count configured.')
+                      : Row(
+                          children: [
+                            Icon(
+                              controller.hasBatteryCountMismatch
+                                  ? Icons.battery_alert
+                                  : Icons.battery_full,
+                              color: controller.hasBatteryCountMismatch
+                                  ? Theme.of(context).colorScheme.error
+                                  : Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                controller.hasBatteryCountMismatch
+                                    ? 'Count mismatch: expected ${controller.expectedBatteryCount}, reported ${controller.reportedBatteryCount}'
+                                    : 'Expected ${controller.expectedBatteryCount}; count matches.',
+                                style: TextStyle(
+                                  color: controller.hasBatteryCountMismatch
+                                      ? Theme.of(context).colorScheme.error
+                                      : null,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+                TextButton.icon(
+                  onPressed: connected
+                      ? () => _configureExpectedBatteryCount(controller)
+                      : null,
+                  icon: const Icon(Icons.tune),
+                  label: const Text('Configure'),
                 ),
               ],
             ),
@@ -549,15 +680,15 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                       final voltage = item?['voltage'];
                       return ListTile(
                         leading: Icon(
-                          live ? Icons.check_circle : Icons.cancel,
+                          _batteryIcon(live),
                           color: live
                               ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).colorScheme.error,
+                              : Theme.of(context).disabledColor,
                         ),
                         title: Text(item?['id']?.toString() ?? 'Unknown device'),
                         subtitle: Text(
                           '${live ? 'Live' : 'Offline'} • Voltage: '
-                          '${voltage == null ? 'Unavailable' : '${voltage} V'}',
+                          '${voltage == null ? 'Unavailable' : '$voltage V'}',
                         ),
                       );
                     },

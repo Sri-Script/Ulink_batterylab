@@ -14,6 +14,7 @@ class DeviceDescriptor {
     this.gatewayId,
     this.meshNodeId,
     this.advertisingName,
+    this.bleDeviceId,
   });
 
   final TransportType mode;
@@ -24,6 +25,9 @@ class DeviceDescriptor {
   final String? gatewayId;
   final String? meshNodeId;
   final String? advertisingName;
+  /// Platform BLE identifier (MAC on Android when exposed). Kept separately
+  /// from the display/device label so unnamed peripherals remain selectable.
+  final String? bleDeviceId;
 
   factory DeviceDescriptor.fromScannedPayload(
     String raw, {
@@ -80,6 +84,11 @@ class DeviceDescriptor {
         advertisingName:
             decoded['advertisingName']?.toString() ??
             DeviceContract.advertisingNameFor(deviceId),
+        // Android exposes the BLE device ID as its MAC address. Accept the
+        // explicit `bleMac` QR field too, so a QR can target one unique device
+        // without relying only on its advertised name.
+        bleDeviceId: decoded['bleDeviceId']?.toString() ??
+            decoded['bleMac']?.toString(),
       );
     }
     final ip = decoded['ip']?.toString().trim() ?? '';
@@ -111,6 +120,7 @@ class DeviceDescriptor {
     if (gatewayId != null) 'gatewayId': gatewayId,
     if (meshNodeId != null) 'meshNodeId': meshNodeId,
     if (advertisingName != null) 'advertisingName': advertisingName,
+    if (bleDeviceId != null) 'bleDeviceId': bleDeviceId,
   };
 
   static bool isValidIpv4(String value) {
