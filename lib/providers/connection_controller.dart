@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -25,6 +26,7 @@ class ConnectionController extends ChangeNotifier {
   final PermissionService _permissions;
   device.DeviceConnection? _connection;
   StreamSubscription<device.ConnectionState>? _stateSubscription;
+  StreamSubscription<Map<String, dynamic>>? _liveReadingsSubscription;
 
   DeviceDescriptor? lastDevice;
   DeviceDescriptor? descriptor;
@@ -34,9 +36,12 @@ class ConnectionController extends ChangeNotifier {
   int? batteryCount;
   int? expectedBatteryCount;
   Map<String, dynamic>? _liveStatus;
+  Map<String, dynamic>? calibrationStatus;
+  final Map<String, Map<String, dynamic>> _liveDevicesBySerial = {};
 
   device.DeviceConnection? get connection => _connection;
   Map<String, dynamic>? get liveStatus => _liveStatus;
+  List<Map<String, dynamic>> get liveDevices => _liveDevicesBySerial.values.toList();
 
   /// The count reported by the status response. A mesh status is authoritative
   /// because it lists every battery, including offline ones.
@@ -71,6 +76,8 @@ class ConnectionController extends ChangeNotifier {
     batteryCount = null;
     expectedBatteryCount = null;
     _liveStatus = null;
+    calibrationStatus = null;
+    _liveDevicesBySerial.clear();
     connecting = true;
     connectionState = reconnect
         ? device.ConnectionState.reconnecting
@@ -82,6 +89,7 @@ class ConnectionController extends ChangeNotifier {
         throw StateError('Bluetooth scan/connect permission was denied.');
       }
       await _stateSubscription?.cancel();
+      await _liveReadingsSubscription?.cancel();
       await _connection?.disconnect();
       final candidate = ConnectionFactory.create(target);
       _stateSubscription = candidate.state.listen((state) {
@@ -93,20 +101,21 @@ class ConnectionController extends ChangeNotifier {
         throw StateError('Could not connect to ${target.deviceId}.');
       }
       _connection = candidate;
+      _liveReadingsSubscription = candidate.liveReadings.listen((reading) {
+        final serial = reading['serial']?.toString();
+        if (serial == null || serial.isEmpty) return;
+        _liveDevicesBySerial[serial] = reading;
+        notifyListeners();
+      });
       descriptor = target;
       lastDevice = target;
       expectedBatteryCount = await _preferences.loadExpectedBatteryCount(
         candidate.gatewayId,
       );
       try {
-        _liveStatus = await candidate.getLiveStatus();
+        calibrationStatus = _jsonMap(await candidate.command('GET_CAL'));
       } catch (_) {
-        _liveStatus = null;
-      }
-      try {
-        batteryCount = await candidate.getBatteryCount();
-      } catch (_) {
-        batteryCount = null;
+        calibrationStatus = null;
       }
       await _preferences.save(target);
       return true;
@@ -122,12 +131,15 @@ class ConnectionController extends ChangeNotifier {
 
   Future<void> disconnect() async {
     await _stateSubscription?.cancel();
+    await _liveReadingsSubscription?.cancel();
     await _connection?.disconnect();
     _connection = null;
     descriptor = null;
     batteryCount = null;
     expectedBatteryCount = null;
     _liveStatus = null;
+    calibrationStatus = null;
+    _liveDevicesBySerial.clear();
     connectionState = device.ConnectionState.disconnected;
     notifyListeners();
   }
@@ -162,6 +174,24 @@ class ConnectionController extends ChangeNotifier {
       await _recordFailure(active.deviceId, key, 'write', error);
       rethrow;
     }
+  }
+
+  Future<String> command(String command, {String logKey = 'command'}) async {
+    final active = _requireConnection();
+    try {
+      final response = await active.command(command);
+      await _database.insert(active.deviceId, CalibrationReading(key: logKey, value: response, timestamp: DateTime.now(), direction: 'command', status: 'success'));
+      return response;
+    } catch (error) {
+      await _recordFailure(active.deviceId, logKey, 'command', error);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> refreshCalibrationStatus() async {
+    calibrationStatus = _jsonMap(await command('GET_CAL', logKey: 'calibrationStatus'));
+    notifyListeners();
+    return calibrationStatus!;
   }
 
   Future<List<CalibrationLogEntry>> history() async {
@@ -213,9 +243,16 @@ class ConnectionController extends ChangeNotifier {
   String _cleanError(Object error) =>
       error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
 
+  Map<String, dynamic> _jsonMap(String value) {
+    final decoded = jsonDecode(value);
+    if (decoded is! Map) throw const FormatException('Expected a JSON object from the device.');
+    return Map<String, dynamic>.from(decoded);
+  }
+
   @override
   void dispose() {
     _stateSubscription?.cancel();
+    _liveReadingsSubscription?.cancel();
     _connection?.disconnect();
     super.dispose();
   }

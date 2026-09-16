@@ -16,6 +16,8 @@ class WifiDeviceConnection implements DeviceConnection {
   final DeviceDescriptor descriptor;
   final http.Client _client;
   final _stateController = StreamController<ConnectionState>.broadcast();
+  final _liveReadingsController = StreamController<Map<String, dynamic>>.broadcast();
+  Timer? _liveTimer;
   Map<String, dynamic>? _status;
 
   Uri _uri(String path) =>
@@ -30,6 +32,8 @@ class WifiDeviceConnection implements DeviceConnection {
   TransportType get transportType => TransportType.wifi;
   @override
   Stream<ConnectionState> get state => _stateController.stream;
+  @override
+  Stream<Map<String, dynamic>> get liveReadings => _liveReadingsController.stream;
 
   @override
   Future<bool> connect() async {
@@ -55,6 +59,8 @@ class WifiDeviceConnection implements DeviceConnection {
         );
       }
       _status = status;
+      _liveTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollLiveReading());
+      _pollLiveReading();
       _stateController.add(ConnectionState.connected);
       return true;
     } catch (_) {
@@ -74,6 +80,7 @@ class WifiDeviceConnection implements DeviceConnection {
   @override
   Future<void> disconnect() async {
     _client.close();
+    _liveTimer?.cancel();
     _stateController.add(ConnectionState.disconnected);
   }
 
@@ -116,6 +123,23 @@ class WifiDeviceConnection implements DeviceConnection {
     } catch (_) {
       _stateController.add(ConnectionState.disconnected);
       rethrow;
+    }
+  }
+
+  @override
+  Future<String> command(String command) async {
+    throw UnsupportedError('The Wi-Fi backend does not yet expose the Nordic UART command endpoint.');
+  }
+
+  Future<void> _pollLiveReading() async {
+    try {
+      final response = await _client.get(_uri('/status')).timeout(AppConfig.connectionTimeout);
+      final payload = jsonDecode(response.body);
+      if (payload is Map<String, dynamic> && payload['serial'] != null) {
+        _liveReadingsController.add(payload);
+      }
+    } catch (_) {
+      // The connection-state stream remains authoritative for Wi-Fi failures.
     }
   }
 

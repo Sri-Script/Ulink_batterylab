@@ -11,6 +11,9 @@ abstract class DeviceConnection {
   Future<bool> connect();
   Future<void> disconnect();
   Stream<ConnectionState> get state;
+  /// Unsolicited firmware readings, keyed by the real serial number.
+  Stream<Map<String, dynamic>> get liveReadings;
+  Future<String> command(String command);
   Future<CalibrationReading> read(String key);
   Future<bool> write(String key, dynamic value, {DateTime? timestamp});
   Future<int> getBatteryCount();

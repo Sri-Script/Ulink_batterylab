@@ -19,12 +19,20 @@ class PermissionService {
       // in the manifest, so Android 12+ ignores this legacy request.
       Permission.locationWhenInUse,
     ].request();
-    final modernGranted =
+    // On Android 12+ these are the runtime "Nearby devices" permissions.
+    // On Android 11 and earlier permission_handler reports the manifest's
+    // normal Bluetooth permissions as granted; location remains required for
+    // scan result visibility and is requested above.
+    final bluetoothGranted =
         statuses[Permission.bluetoothScan]?.isGranted == true &&
         statuses[Permission.bluetoothConnect]?.isGranted == true;
     final legacyGranted =
         statuses[Permission.locationWhenInUse]?.isGranted == true;
-    return modernGranted || legacyGranted;
+    // Location is declared only through API 30 in AndroidManifest.xml. On
+    // Android 12+ it therefore cannot authorize a scan; the Bluetooth grants
+    // above do. On Android 11 and older the normal Bluetooth manifest grants
+    // plus location authorize scanning.
+    return bluetoothGranted || legacyGranted;
   }
 
   Future<bool> requestNotifications() async {

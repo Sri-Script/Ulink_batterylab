@@ -12,7 +12,11 @@ class DeviceContract {
   static const String mdnsServiceName = '_ulink._tcp.local';
   static const String wifiSsidPrefix = 'ULINK-';
   static const String defaultBleServiceUuid =
-      '0000181a-0000-1000-8000-00805f9b34fb';
+      '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  static const String nordicUartRxUuid =
+      '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+  static const String nordicUartTxUuid =
+      '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
   // Broadcast discovery — placeholder port/message until firmware confirms.
   static const int broadcastDiscoveryPort = 47890;
@@ -21,21 +25,20 @@ class DeviceContract {
   static const List<BarcodeFormat> qrFormats = [BarcodeFormat.qrCode];
   static const List<BarcodeFormat> barcodeFormats = [BarcodeFormat.code128];
 
-  // TODO: confirm serial format with hardware team.
-  static final RegExp serialPattern = RegExp(r'^ULINK-[A-Z0-9]{4,10}$');
-  static final RegExp deviceIdPattern = RegExp(
-    r'^(?:ULINK-[A-Z0-9]{4,10}|ULINK-GW-[A-Z0-9]{4,10})$',
-  );
+  /// Production firmware serials, e.g. `BATTERY-001`.
+  /// Demo gateway IDs are deliberately not validated by this production regex.
+  static final RegExp serialPattern = RegExp(r'^BATTERY-[A-Z0-9]{3,}$');
+  static final RegExp deviceIdPattern = RegExp(r'^BATTERY-[A-Z0-9]{3,}$');
 
   /// BLE advertising-name prefixes observed in real deployments.
-  ///
-  /// `UBM-Node1` is one confirmed real device name. It is not evidence that
-  /// every UBM device will use the `UBM-` prefix; confirm the enduring naming
-  /// contract with the firmware team before treating this list as final.
   static const List<String> advertisingNamePrefixes = [
     'ULINK-GW-',
-    'UBM-',
   ];
+
+  /// Confirmed ESP BLE labels that are not part of the gateway prefix.
+  /// Keep these exact rather than accepting all `UBM-*` devices, which could
+  /// expose unrelated nearby peripherals in this device-specific workflow.
+  static const List<String> recognizedBleNames = ['UBM-Node1'];
 
   /// Retained for callers that need the canonical Ulink gateway label.
   //static const String advertisingNamePrefix = advertisingNamePrefixes.first;
@@ -74,11 +77,15 @@ class DeviceContract {
     String? expectedAdvertisingName,
   }) {
     final normalizedName = advertisedName.toLowerCase();
-    return expectedAdvertisingName == null
-        ? advertisingNamePrefixes.any(
-            (prefix) => normalizedName.startsWith(prefix.toLowerCase()),
-          )
-        : normalizedName == expectedAdvertisingName.toLowerCase();
+    if (expectedAdvertisingName != null) {
+      return normalizedName == expectedAdvertisingName.toLowerCase();
+    }
+    return advertisingNamePrefixes.any(
+          (prefix) => normalizedName.startsWith(prefix.toLowerCase()),
+        ) ||
+        recognizedBleNames.any(
+          (name) => normalizedName == name.toLowerCase(),
+        );
   }
 
   static String _normalizeBleDeviceId(String value) =>

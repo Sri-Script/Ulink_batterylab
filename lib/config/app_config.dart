@@ -1,11 +1,12 @@
 class AppConfig {
   const AppConfig._();
 
-  /// Assumption: demo is the safest default for emulator-first development.
-  /// Run with --dart-define=DEMO_MODE=false when using physical hardware.
+  /// Real Bluetooth is the production default. Demo mode is opt-in so a
+  /// synthetic gateway can never hide a physical ESP peripheral.
+  /// Run with --dart-define=DEMO_MODE=true only for UI development.
   static const bool demoMode = bool.fromEnvironment(
     'DEMO_MODE',
-    defaultValue: true,
+    defaultValue: false,
   );
 
   static const Duration connectionTimeout = Duration(seconds: 10);

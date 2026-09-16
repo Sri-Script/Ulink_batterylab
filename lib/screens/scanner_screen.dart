@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
@@ -16,11 +15,18 @@ import 'calibration_screen.dart';
 import 'live_data_viewer_screen.dart';
 import 'login_screen.dart';
 import 'programmer_home_screen.dart';
+import 'scanner_status_card.dart';
 
 enum ScanMode { qr, barcode }
 
+//class ScannerScreen extends StatefulWidget {
+ // const ScannerScreen({super.key});
+
 class ScannerScreen extends StatefulWidget {
-  const ScannerScreen({super.key, this.bluetoothNeedsAttention = false});
+  const ScannerScreen({
+    super.key,
+    this.bluetoothNeedsAttention = false,
+  });
 
   final bool bluetoothNeedsAttention;
   @override
@@ -32,14 +38,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
   ScanMode _mode = ScanMode.qr;
   bool _handlingScan = false;
   bool _cameraAllowed = false;
+  bool _scannerActive = false;
+  String _scanStatus = 'Preparing camera…';
   String? _feedback;
   bool _feedbackIsError = false;
   DeviceDescriptor? _validatedBarcode;
-  late bool _bluetoothNeedsAttention;
-  bool _checkingBluetooth = false;
 
   MobileScannerController _newScanner() => MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
+    // Scan the complete camera image. Restricting it to the overlay rectangle
+    // can miss a QR code when camera coordinates differ from screen pixels.
+    detectionSpeed: DetectionSpeed.normal,
+    autoStart: false,
     formats: _mode == ScanMode.qr
         ? DeviceContract.qrFormats
         : DeviceContract.barcodeFormats,
@@ -48,7 +57,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
   @override
   void initState() {
     super.initState();
-    _bluetoothNeedsAttention = widget.bluetoothNeedsAttention;
     WidgetsBinding.instance.addPostFrameCallback((_) => _prepare());
   }
 
@@ -56,7 +64,34 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final controller = context.read<ConnectionController>();
     await controller.initialize();
     final allowed = await controller.requestCameraPermission();
-    if (mounted) setState(() => _cameraAllowed = allowed);
+    if (!mounted) return;
+    setState(() {
+      _cameraAllowed = allowed;
+      _scanStatus = allowed
+          ? 'Camera ready — looking for a QR code'
+          : 'Camera permission is required to scan';
+    });
+    if (allowed) await _startScanner();
+  }
+
+  Future<void> _startScanner() async {
+    if (!_cameraAllowed || _handlingScan) return;
+    try {
+      setState(() {
+        _scannerActive = true;
+        _scanStatus = _mode == ScanMode.qr
+            ? 'Scanning live — point at a QR code'
+            : 'Scanning live — point at a Code 128 barcode';
+        _feedback = null;
+      });
+      await _scanner.start();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _scannerActive = false;
+        _scanStatus = 'Camera could not start. Tap Restart scanner.';
+      });
+    }
   }
 
   Future<void> _changeMode(ScanMode mode) async {
@@ -69,8 +104,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _scanner = _newScanner();
       _feedback = null;
       _validatedBarcode = null;
+      _scannerActive = false;
     });
     await previous.dispose();
+    await _startScanner();
   }
 
   Future<void> _onCapture(BarcodeCapture capture) async {
@@ -84,6 +121,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
       return;
     }
     try {
+      setState(() {
+        _scannerActive = false;
+        _scanStatus = 'Code detected — validating…';
+      });
       final descriptor = DeviceDescriptor.fromScannedPayload(
         raw,
         barcode: _mode == ScanMode.barcode,
@@ -126,7 +167,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _validatedBarcode = null;
       _feedback = null;
     });
-    await _scanner.start();
+    await _startScanner();
   }
 
   Future<void> _connect(
@@ -134,11 +175,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
         bool reconnect = false,
       }) async {
     final controller = context.read<ConnectionController>();
-    if (descriptor.mode == TransportType.ble && !await _isBluetoothReady()) {
-      return;
-    }
     setState(() {
       _handlingScan = true;
+      _scannerActive = false;
+      _scanStatus = 'Code accepted — connecting…';
       _feedback = descriptor.mode == TransportType.ble
           ? 'Waiting for the gateway to advertise (up to 60s)...'
           : null;
@@ -164,60 +204,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _handlingScan = false;
         _validatedBarcode = null;
       });
-      if (_cameraAllowed) await _scanner.start();
-    }
-  }
-
-  Future<bool> _isBluetoothReady() async {
-    if (AppConfig.demoMode) return true;
-    try {
-      final ready =
-          FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on;
-      if (mounted) setState(() => _bluetoothNeedsAttention = !ready);
-      if (!ready) {
-        _showFeedback(
-          'Bluetooth needs to be enabled before connecting to a BLE gateway.',
-          error: true,
-        );
-      }
-      return ready;
-    } catch (_) {
-      if (mounted) setState(() => _bluetoothNeedsAttention = true);
-      _showFeedback(
-        'Bluetooth needs to be enabled before connecting to a BLE gateway.',
-        error: true,
-      );
-      return false;
-    }
-  }
-
-  Future<void> _retryBluetooth() async {
-    if (_checkingBluetooth || AppConfig.demoMode) return;
-    setState(() => _checkingBluetooth = true);
-    try {
-      if (FlutterBluePlus.adapterStateNow == BluetoothAdapterState.off) {
-        await FlutterBluePlus.turnOn();
-      }
-      final ready =
-          FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on;
-      if (!mounted) return;
-      setState(() {
-        _bluetoothNeedsAttention = !ready;
-        _feedback = ready
-            ? 'Bluetooth is enabled. BLE features are ready to use.'
-            : 'Bluetooth is still off. Enable it to use BLE features.';
-        _feedbackIsError = !ready;
-      });
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _bluetoothNeedsAttention = true;
-          _feedback = 'Bluetooth needs to be enabled for BLE features to work.';
-          _feedbackIsError = true;
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _checkingBluetooth = false);
+      if (_cameraAllowed) await _startScanner();
     }
   }
 
@@ -265,7 +252,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (result != null) {
       await _connect(result);
     } else if (_cameraAllowed) {
-      await _scanner.start();
+      await _startScanner();
     }
   }
 
@@ -275,9 +262,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => user == null
-              ? const LoginScreen()
-              : const LiveDataViewerScreen(),
+          builder: (_) =>
+          user == null ? const LoginScreen() : const LiveDataViewerScreen(),
         ),
       );
     } catch (_) {
@@ -331,13 +317,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     selected: {_mode},
                     onSelectionChanged: (value) => _changeMode(value.first),
                   ),
-                  if (_bluetoothNeedsAttention) ...[
-                    const SizedBox(height: 10),
-                    _BluetoothRequiredMessage(
-                      checking: _checkingBluetooth,
-                      onRetry: _retryBluetooth,
-                    ),
-                  ],
                   if (controller.lastDevice case final last?) ...[
                     const SizedBox(height: 10),
                     OutlinedButton.icon(
@@ -361,14 +340,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       constraints.maxHeight - 32,
                     ),
                   );
-                  final scanWindow = Rect.fromCenter(
-                    center: Offset(
-                      constraints.maxWidth / 2,
-                      constraints.maxHeight / 2,
-                    ),
-                    width: size,
-                    height: size,
-                  );
                   return Stack(
                     fit: StackFit.expand,
                     children: [
@@ -376,7 +347,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
                         MobileScanner(
                           key: ValueKey(_mode),
                           controller: _scanner,
-                          scanWindow: scanWindow,
                           onDetect: _onCapture,
                           errorBuilder: (_, _) => const _PermissionMessage(
                             message:
@@ -389,6 +359,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           'Camera permission denied. Allow camera access in Settings to scan a gateway.',
                         ),
                       if (_cameraAllowed) ScanFrameOverlay(size: size),
+                      if (_cameraAllowed)
+                        Positioned(
+                          top: 16,
+                          left: 20,
+                          right: 20,
+                          child: ScannerStatusCard(
+                            active: _scannerActive,
+                            message: _scanStatus,
+                          ),
+                        ),
                       Positioned(
                         left: 24,
                         right: 24,
@@ -403,8 +383,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           ),
                           child: Text(
                             _mode == ScanMode.qr
-                                ? 'Place one Ulink QR code inside the frame'
-                                : 'Place the Code 128 serial inside the frame',
+                                ? 'Keep the full QR code inside the frame'
+                                : 'Keep the full Code 128 serial inside the frame',
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -469,13 +449,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     ),
                   const SizedBox(height: 6),
                   OutlinedButton.icon(
+                    onPressed: _handlingScan ? null : _startScanner,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Restart scanner'),
+                  ),
+                  const SizedBox(height: 6),
+                  OutlinedButton.icon(
                     onPressed: _handlingScan
                         ? null
                         : () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const ProgrammerHomeScreen(),
-                            ),
-                          ),
+                      MaterialPageRoute<void>(
+                        builder: (_) => const ProgrammerHomeScreen(),
+                      ),
+                    ),
                     icon: const Icon(Icons.settings_input_antenna),
                     label: const Text('Program a Device'),
                   ),
@@ -698,44 +684,6 @@ class _PermissionMessage extends StatelessWidget {
           ],
         ),
       ),
-    ),
-  );
-}
-
-class _BluetoothRequiredMessage extends StatelessWidget {
-  const _BluetoothRequiredMessage({
-    required this.checking,
-    required this.onRetry,
-  });
-
-  final bool checking;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.errorContainer,
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Row(
-      children: [
-        Icon(
-          Icons.bluetooth_disabled,
-          color: Theme.of(context).colorScheme.onErrorContainer,
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            'Bluetooth needs to be enabled for BLE features to work.',
-            style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
-          ),
-        ),
-        TextButton(
-          onPressed: checking ? null : onRetry,
-          child: Text(checking ? 'Checking...' : 'Retry'),
-        ),
-      ],
     ),
   );
 }
