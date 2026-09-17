@@ -38,10 +38,12 @@ class ConnectionController extends ChangeNotifier {
   Map<String, dynamic>? _liveStatus;
   Map<String, dynamic>? calibrationStatus;
   final Map<String, Map<String, dynamic>> _liveDevicesBySerial = {};
+  final Map<String, int> _liveUpdateSequences = {};
 
   device.DeviceConnection? get connection => _connection;
   Map<String, dynamic>? get liveStatus => _liveStatus;
   List<Map<String, dynamic>> get liveDevices => _liveDevicesBySerial.values.toList();
+  int liveUpdateSequence(String serial) => _liveUpdateSequences[serial] ?? 0;
 
   /// The count reported by the status response. A mesh status is authoritative
   /// because it lists every battery, including offline ones.
@@ -78,6 +80,7 @@ class ConnectionController extends ChangeNotifier {
     _liveStatus = null;
     calibrationStatus = null;
     _liveDevicesBySerial.clear();
+    _liveUpdateSequences.clear();
     connecting = true;
     connectionState = reconnect
         ? device.ConnectionState.reconnecting
@@ -105,6 +108,7 @@ class ConnectionController extends ChangeNotifier {
         final serial = reading['serial']?.toString();
         if (serial == null || serial.isEmpty) return;
         _liveDevicesBySerial[serial] = reading;
+        _liveUpdateSequences[serial] = (_liveUpdateSequences[serial] ?? 0) + 1;
         notifyListeners();
       });
       descriptor = target;
@@ -116,6 +120,19 @@ class ConnectionController extends ChangeNotifier {
         calibrationStatus = _jsonMap(await candidate.command('GET_CAL'));
       } catch (_) {
         calibrationStatus = null;
+      }
+      if (target.mode == TransportType.ble) {
+        try {
+          // This synchronizes only the directly-connected BLE device, whatever
+          // its role (MASTER or AVAILABLE). ESP-NOW-relayed SLAVE nodes have no
+          // phone BLE link; syncing them needs a firmware relay capability.
+          await candidate.command('SET_TIME:${DateTime.now().toIso8601String()}');
+          debugPrint('Ulink: synced directly-connected device clock on connect.');
+        } catch (error) {
+          // Clock sync is additive; a device with an older firmware command set
+          // must still remain connected and usable for calibration.
+          debugPrint('Ulink: automatic clock sync failed: $error');
+        }
       }
       await _preferences.save(target);
       return true;
@@ -140,6 +157,7 @@ class ConnectionController extends ChangeNotifier {
     _liveStatus = null;
     calibrationStatus = null;
     _liveDevicesBySerial.clear();
+    _liveUpdateSequences.clear();
     connectionState = device.ConnectionState.disconnected;
     notifyListeners();
   }
