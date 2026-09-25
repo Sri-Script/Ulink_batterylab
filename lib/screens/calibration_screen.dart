@@ -30,7 +30,8 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       );
       if (!mounted) return;
       final decoded = _json(response);
-      if (decoded != null && (command.startsWith('CAL_TEMP') || command.startsWith('CAL_VOLT'))) {
+      final failed = _responseIndicatesFailure(response, decoded);
+      if (!failed && decoded != null && (command.startsWith('CAL_TEMP') || command.startsWith('CAL_VOLT'))) {
         setState(() {
           if (command.startsWith('CAL_TEMP')) {
             _lastDetectedTemp = _firstValue(decoded, const [
@@ -43,12 +44,27 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
           }
         });
       }
-      _message(response, error: response.startsWith('ERROR:'));
-      if (command == 'GET_CAL' || command.startsWith('RESET_')) {
+      if (_isWriteCommand(command)) {
+        await _showCommandResult(
+          command: command,
+          response: response,
+          decoded: decoded,
+          failed: failed,
+        );
+      } else {
+        _message(response, error: failed);
+      }
+      if (!mounted) return;
+      if (!failed && (command == 'GET_CAL' || command.startsWith('RESET_'))) {
         await context.read<ConnectionController>().refreshCalibrationStatus();
       }
     } catch (error) {
-      if (mounted) _message(_clean(error), error: true);
+      if (!mounted) return;
+      if (_isWriteCommand(command)) {
+        await _showCommandFailure(command, _clean(error));
+      } else {
+        _message(_clean(error), error: true);
+      }
     } finally {
       if (mounted) setState(() => _busy.remove(key));
     }
@@ -128,6 +144,85 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     SnackBar(content: Text(message.trim()), backgroundColor: error ? Theme.of(context).colorScheme.error : null),
   );
   String _clean(Object error) => error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
+
+  bool _isWriteCommand(String command) =>
+      command.startsWith('CAL_TEMP:') ||
+      command.startsWith('CAL_VOLT:') ||
+      command.startsWith('SET_SN:') ||
+      command.startsWith('SET_TIME:') ||
+      command == 'MAKE_MASTER' ||
+      command == 'MAKE_AVAILABLE' ||
+      command.startsWith('RESET_');
+
+  bool _responseIndicatesFailure(String response, Map<String, dynamic>? decoded) {
+    if (response.trimLeft().toUpperCase().startsWith('ERROR:')) return true;
+    if (decoded == null) return false;
+    final status = decoded['status']?.toString().toUpperCase();
+    final result = decoded['result']?.toString().toUpperCase();
+    return decoded['ok'] == false ||
+        decoded['success'] == false ||
+        decoded['valid'] == false ||
+        decoded['reading_valid'] == false ||
+        decoded['invalid_reading'] == true ||
+        decoded['error'] != null ||
+        decoded['errors'] != null ||
+        status == 'ERROR' ||
+        status == 'FAILED' ||
+        status == 'FAILURE' ||
+        result == 'ERROR' ||
+        result == 'FAILED' ||
+        result == 'FAILURE';
+  }
+
+  Future<void> _showCommandResult({
+    required String command,
+    required String response,
+    required Map<String, dynamic>? decoded,
+    required bool failed,
+  }) => showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) => AlertDialog(
+      icon: Icon(
+        failed ? Icons.error : Icons.check_circle,
+        color: failed
+            ? Theme.of(dialogContext).colorScheme.error
+            : Theme.of(dialogContext).colorScheme.primary,
+        size: 40,
+      ),
+      title: Text(failed ? 'Command failed' : 'Sent successfully'),
+      content: SingleChildScrollView(
+        child: SelectableText(
+          'Sent:\n$command\n\nDevice response:\n${_responseDetails(response, decoded)}',
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Continue'),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _showCommandFailure(String command, String error) => showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) => AlertDialog(
+      icon: Icon(Icons.error, color: Theme.of(dialogContext).colorScheme.error, size: 40),
+      title: const Text('Command failed'),
+      content: SelectableText('Sent:\n$command\n\nFailure:\n$error'),
+      actions: [
+        FilledButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Continue')),
+      ],
+    ),
+  );
+
+  String _responseDetails(String response, Map<String, dynamic>? decoded) {
+    if (decoded == null) return response.trim();
+    return const JsonEncoder.withIndent('  ').convert(decoded);
+  }
+
   Map<String, dynamic>? _json(String value) {
     try { final decoded = jsonDecode(value); return decoded is Map ? Map<String, dynamic>.from(decoded) : null; }
     on FormatException { return null; }

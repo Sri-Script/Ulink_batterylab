@@ -9,7 +9,7 @@ import '../config/app_config.dart';
 import '../config/device_contract.dart';
 import '../models/device_descriptor.dart';
 import '../providers/connection_controller.dart';
-import 'wifi_provisioning_screen.dart';
+import 'calibration_screen.dart';
 
 class ProgrammerHomeScreen extends StatefulWidget {
   const ProgrammerHomeScreen({super.key});
@@ -29,7 +29,6 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
   String _status = 'Preparing Bluetooth…';
   String? _error;
   String? _selectedId;
-  DeviceDescriptor? _connected;
 
   @override
   void initState() {
@@ -46,7 +45,7 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
   Future<void> _scan() async {
     if (_scanning || _connecting) return;
     setState(() {
-      _nearby.clear(); _rawAdvertisementIds.clear(); _selectedId = null; _connected = null; _error = null;
+      _nearby.clear(); _rawAdvertisementIds.clear(); _selectedId = null; _error = null;
       _scanning = true; _status = 'Requesting Bluetooth permissions…';
     });
     try {
@@ -79,8 +78,8 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
       );
       if (mounted) {
         setState(() => _status = _rawAdvertisementIds.isEmpty
-            ? 'No BLE advertisements were captured. UBM-Node1 may be Bluetooth Classic only, or ESP firmware may not be advertising a BLE local name/service.'
-            : 'Scan complete: ${_nearby.length} recognized nearby device(s). Select one.');
+            ? 'No BLE advertisements were captured. Check Bluetooth and permissions, then scan again.'
+            : 'Scan complete: ${_nearby.length} nearby BLE device(s). Select one.');
       }
     } on TimeoutException {
       _log('scan completion timed out');
@@ -98,22 +97,18 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
   void _collect(List<ScanResult> results) {
     for (final result in results) {
       _rawAdvertisementIds.add(result.device.remoteId.str);
-      final accepted = DeviceContract.matchesAdvertisingName(result.advertisementData.advName);
-      _logAdvertisement(result, accepted: accepted);
-      if (accepted) _nearby[result.device.remoteId.str] = result;
+      _logAdvertisement(result);
+      _nearby[result.device.remoteId.str] = result;
     }
     if (mounted) setState(() {});
   }
 
-  void _logAdvertisement(ScanResult result, {required bool accepted}) {
+  void _logAdvertisement(ScanResult result) {
     if (!kDebugMode) return;
     final data = result.advertisementData;
-    final reason = accepted
-        ? 'accepted: recognized ESP name (ULINK-GW-* or exact UBM-Node1)'
-        : 'rejected: name is outside the intentional ESP allowlist';
     debugPrint('Ulink BLE scan: id=${result.device.remoteId.str} advName="${data.advName}" '
         'platformName="${result.device.platformName}" services=${data.serviceUuids} '
-        'rssi=${result.rssi}; $reason');
+        'rssi=${result.rssi}; listed');
   }
 
   DeviceDescriptor _descriptor(ScanResult result) {
@@ -136,17 +131,41 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
     final success = await context.read<ConnectionController>().connect(descriptor);
     if (!mounted) return;
     setState(() {
-      _connecting = false; _connected = success ? descriptor : null;
+      _connecting = false;
       _error = success ? null : _clean(context.read<ConnectionController>().errorMessage ?? 'Connection failed.');
       _status = success ? 'Connected. GATT services and characteristics were discovered.' : 'Disconnected. Select the device and retry.';
     });
+    if (success) await _openCalibration(descriptor);
   }
 
   Future<void> _connectDemo() async {
     final descriptor = DeviceDescriptor(mode: TransportType.ble, deviceId: 'ULINK-GW-TEST01', gatewayId: 'ULINK-GW-TEST01', serviceUuid: DeviceContract.defaultBleServiceUuid, advertisingName: 'ULINK-GW-TEST01');
     setState(() { _connecting = true; _status = 'Connecting to demo gateway…'; });
     final success = await context.read<ConnectionController>().connect(descriptor);
-    if (mounted) setState(() { _connecting = false; _connected = success ? descriptor : null; _error = success ? null : context.read<ConnectionController>().errorMessage; _status = success ? 'Connected to demo gateway.' : 'Demo connection failed.'; });
+    if (mounted) setState(() { _connecting = false; _error = success ? null : context.read<ConnectionController>().errorMessage; _status = success ? 'Connected to demo gateway.' : 'Demo connection failed.'; });
+    if (success && mounted) await _openCalibration(descriptor);
+  }
+
+  Future<void> _openCalibration(DeviceDescriptor descriptor) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(Icons.check_circle, color: Theme.of(dialogContext).colorScheme.primary, size: 40),
+        title: const Text('Connection successful'),
+        content: Text('Connected to ${descriptor.deviceId}.'),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const CalibrationScreen()),
+    );
   }
 
   String _name(ScanResult result) => result.advertisementData.advName.isNotEmpty
@@ -176,21 +195,27 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
       appBar: AppBar(title: const Text('Program a Device')),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        child: RadioGroup<String>(
+          groupValue: _selectedId,
+          onChanged: (value) {
+            if (!demo && _connecting) return;
+            setState(() => _selectedId = value);
+          },
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           ListTile(contentPadding: EdgeInsets.zero, leading: Icon(demo || _adapterState == BluetoothAdapterState.on ? Icons.bluetooth_connected : Icons.bluetooth_disabled), title: Text(demo ? 'Demo Bluetooth mode' : _adapterMessage(_adapterState)), subtitle: Text(_status)),
           if (_error != null) _ErrorBanner(message: _error!),
           if (_scanning || _connecting) const LinearProgressIndicator(),
           const SizedBox(height: 8),
-          Text('Nearby programmable BLE devices (${demo ? 1 : devices.length})', style: Theme.of(context).textTheme.titleMedium),
-          const Text('Recognized ESP names only: ULINK-GW-* and UBM-Node1.'),
-          Expanded(child: demo ? RadioListTile<String>(value: 'demo', groupValue: _selectedId, onChanged: (_) => setState(() => _selectedId = 'demo'), title: const Text('ULINK-GW-TEST01'), subtitle: const Text('Demo gateway')) : devices.isEmpty ? const Center(child: Text('No recognized BLE advertisements captured. Check debug logs, Bluetooth, and permissions, then scan again.')) : ListView.separated(itemCount: devices.length, separatorBuilder: (_, _) => const Divider(height: 1), itemBuilder: (_, index) {
+          Text('Nearby BLE devices (${demo ? 1 : devices.length})', style: Theme.of(context).textTheme.titleMedium),
+          const Text('Select a device to attempt a BLE connection.'),
+          Expanded(child: demo ? RadioListTile<String>(value: 'demo', title: const Text('ULINK-GW-TEST01'), subtitle: const Text('Demo gateway')) : devices.isEmpty ? const Center(child: Text('No BLE advertisements captured. Check debug logs, Bluetooth, and permissions, then scan again.')) : ListView.separated(itemCount: devices.length, separatorBuilder: (_, _) => const Divider(height: 1), itemBuilder: (_, index) {
             final result = devices[index]; final services = result.advertisementData.serviceUuids;
-            return RadioListTile<String>(value: result.device.remoteId.str, groupValue: _selectedId, onChanged: _connecting ? null : (value) => setState(() => _selectedId = value), title: Text(_name(result)), subtitle: Text('ID: ${result.device.remoteId.str}\nRSSI: ${result.rssi} dBm • services: ${services.isEmpty ? 'none advertised' : services.join(', ')}'), isThreeLine: true, secondary: const Icon(Icons.bluetooth));
+            return RadioListTile<String>(value: result.device.remoteId.str, title: Text(_name(result)), subtitle: Text('ID: ${result.device.remoteId.str}\nRSSI: ${result.rssi} dBm • services: ${services.isEmpty ? 'none advertised' : services.join(', ')}'), isThreeLine: true, secondary: const Icon(Icons.bluetooth));
           })),
           OutlinedButton.icon(onPressed: _scanning || _connecting ? null : _scan, icon: const Icon(Icons.refresh), label: const Text('Scan again')),
           if (_selectedId != null) FilledButton.icon(onPressed: _connecting ? null : (demo ? _connectDemo : _connect), icon: const Icon(Icons.link), label: Text(_connecting ? 'Connecting / discovering…' : 'Connect selected device')),
-          if (_connected != null) FilledButton.icon(onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const WifiProvisioningScreen())), icon: const Icon(Icons.arrow_forward), label: const Text('Continue to provisioning')),
-        ]),
+          ]),
+        ),
       ),
     );
   }

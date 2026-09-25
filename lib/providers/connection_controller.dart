@@ -74,6 +74,10 @@ class ConnectionController extends ChangeNotifier {
     DeviceDescriptor target, {
     bool reconnect = false,
   }) async {
+    if (connecting) {
+      debugPrint('Ulink BLE: connect ignored because another attempt is active.');
+      return false;
+    }
     errorMessage = null;
     batteryCount = null;
     expectedBatteryCount = null;
@@ -91,9 +95,14 @@ class ConnectionController extends ChangeNotifier {
           !await _permissions.requestBle()) {
         throw StateError('Bluetooth scan/connect permission was denied.');
       }
+      final previousConnection = _connection;
+      _connection = null;
+      descriptor = null;
       await _stateSubscription?.cancel();
+      _stateSubscription = null;
       await _liveReadingsSubscription?.cancel();
-      await _connection?.disconnect();
+      _liveReadingsSubscription = null;
+      await previousConnection?.disconnect();
       final candidate = ConnectionFactory.create(target);
       _stateSubscription = candidate.state.listen((state) {
         connectionState = state;
@@ -137,6 +146,12 @@ class ConnectionController extends ChangeNotifier {
       await _preferences.save(target);
       return true;
     } catch (error) {
+      await _stateSubscription?.cancel();
+      _stateSubscription = null;
+      await _liveReadingsSubscription?.cancel();
+      _liveReadingsSubscription = null;
+      _connection = null;
+      descriptor = null;
       errorMessage = _cleanError(error);
       connectionState = device.ConnectionState.disconnected;
       return false;
@@ -148,9 +163,12 @@ class ConnectionController extends ChangeNotifier {
 
   Future<void> disconnect() async {
     await _stateSubscription?.cancel();
+    _stateSubscription = null;
     await _liveReadingsSubscription?.cancel();
-    await _connection?.disconnect();
+    _liveReadingsSubscription = null;
+    final activeConnection = _connection;
     _connection = null;
+    await activeConnection?.disconnect();
     descriptor = null;
     batteryCount = null;
     expectedBatteryCount = null;
