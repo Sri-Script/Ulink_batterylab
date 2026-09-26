@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../models/calibration_log_entry.dart';
 import '../models/calibration_reading.dart';
 import '../models/device_descriptor.dart';
+import '../config/device_contract.dart';
 import '../services/calibration_database.dart';
 import '../services/connection_factory.dart';
 import '../services/device_connection.dart' as device;
@@ -39,11 +40,21 @@ class ConnectionController extends ChangeNotifier {
   Map<String, dynamic>? calibrationStatus;
   final Map<String, Map<String, dynamic>> _liveDevicesBySerial = {};
   final Map<String, int> _liveUpdateSequences = {};
+  final Map<String, DateTime> _lastSeenByDevice = {};
+  String? _masterSerial;
+  String? _masterNodeIdentity;
 
   device.DeviceConnection? get connection => _connection;
   Map<String, dynamic>? get liveStatus => _liveStatus;
   List<Map<String, dynamic>> get liveDevices => _liveDevicesBySerial.values.toList();
   int liveUpdateSequence(String serial) => _liveUpdateSequences[serial] ?? 0;
+  String get masterSerial => _masterSerial ?? descriptor?.deviceId ?? 'Unknown';
+  int get reportingSlaveCount {
+    final master = _masterSerial;
+    return _lastSeenByDevice.keys
+        .where((id) => id != master && id != _masterNodeIdentity)
+        .length;
+  }
 
   /// The count reported by the status response. A mesh status is authoritative
   /// because it lists every battery, including offline ones.
@@ -85,6 +96,9 @@ class ConnectionController extends ChangeNotifier {
     calibrationStatus = null;
     _liveDevicesBySerial.clear();
     _liveUpdateSequences.clear();
+    _lastSeenByDevice.clear();
+    _masterSerial = null;
+    _masterNodeIdentity = null;
     connecting = true;
     connectionState = reconnect
         ? device.ConnectionState.reconnecting
@@ -114,10 +128,15 @@ class ConnectionController extends ChangeNotifier {
       }
       _connection = candidate;
       _liveReadingsSubscription = candidate.liveReadings.listen((reading) {
-        final serial = reading['serial']?.toString();
-        if (serial == null || serial.isEmpty) return;
-        _liveDevicesBySerial[serial] = reading;
-        _liveUpdateSequences[serial] = (_liveUpdateSequences[serial] ?? 0) + 1;
+        final identity = _liveIdentity(reading);
+        if (identity == null) return;
+        final now = DateTime.now();
+        _liveDevicesBySerial[identity] = reading;
+        _liveUpdateSequences[identity] = (_liveUpdateSequences[identity] ?? 0) + 1;
+        _lastSeenByDevice[identity] = now;
+        _lastSeenByDevice.removeWhere(
+          (_, lastSeen) => now.difference(lastSeen) > const Duration(seconds: 60),
+        );
         notifyListeners();
       });
       descriptor = target;
@@ -125,6 +144,15 @@ class ConnectionController extends ChangeNotifier {
       expectedBatteryCount = await _preferences.loadExpectedBatteryCount(
         candidate.gatewayId,
       );
+      try {
+        final role = _jsonMap(await candidate.command('GET_ROLE'));
+        _masterSerial = role['serial']?.toString();
+        final node = role['node']?.toString().trim();
+        _masterNodeIdentity = node == null || node.isEmpty ? null : 'node:$node';
+      } catch (_) {
+        _masterSerial = null;
+        _masterNodeIdentity = null;
+      }
       try {
         calibrationStatus = _jsonMap(await candidate.command('GET_CAL'));
       } catch (_) {
@@ -135,7 +163,9 @@ class ConnectionController extends ChangeNotifier {
           // This synchronizes only the directly-connected BLE device, whatever
           // its role (MASTER or AVAILABLE). ESP-NOW-relayed SLAVE nodes have no
           // phone BLE link; syncing them needs a firmware relay capability.
-          await candidate.command('SET_TIME:${DateTime.now().toIso8601String()}');
+          await candidate.command(
+            'SET_TIME:${DeviceContract.deviceTimestamp(DateTime.now())}',
+          );
           debugPrint('Ulink: synced directly-connected device clock on connect.');
         } catch (error) {
           // Clock sync is additive; a device with an older firmware command set
@@ -176,6 +206,9 @@ class ConnectionController extends ChangeNotifier {
     calibrationStatus = null;
     _liveDevicesBySerial.clear();
     _liveUpdateSequences.clear();
+    _lastSeenByDevice.clear();
+    _masterSerial = null;
+    _masterNodeIdentity = null;
     connectionState = device.ConnectionState.disconnected;
     notifyListeners();
   }
@@ -258,6 +291,13 @@ class ConnectionController extends ChangeNotifier {
       throw StateError('Device is disconnected. Reconnect before calibrating.');
     }
     return active;
+  }
+
+  String? _liveIdentity(Map<String, dynamic> reading) {
+    final serial = reading['serial']?.toString().trim();
+    if (serial != null && serial.isNotEmpty) return serial;
+    final node = reading['node']?.toString().trim();
+    return node == null || node.isEmpty ? null : 'node:$node';
   }
 
   Future<void> _recordFailure(

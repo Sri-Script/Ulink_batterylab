@@ -192,7 +192,16 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
     final devices = _nearby.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
     final demo = AppConfig.demoMode;
     return Scaffold(
-      appBar: AppBar(title: const Text('Program a Device')),
+      appBar: AppBar(
+        title: const Text('Program a Device'),
+        actions: [
+          IconButton(
+            onPressed: _scanning || _connecting ? null : _scan,
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Scan again',
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: RadioGroup<String>(

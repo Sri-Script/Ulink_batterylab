@@ -119,8 +119,18 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _clock() async {
-    final value = await _ask('Clock', hint: 'Blank reads; ISO-8601 sets.', allowEmpty: true);
-    if (value != null) await _run('clock', value.isEmpty ? 'GET_TIME' : 'SET_TIME:$value');
+    final value = await _ask('Clock', hint: 'Blank reads; ISO-8601 sets with UTC offset.', allowEmpty: true);
+    if (value == null) return;
+    if (value.isEmpty) {
+      await _run('clock', 'GET_TIME');
+      return;
+    }
+    final timestamp = DateTime.tryParse(value);
+    if (timestamp == null) {
+      _message('Enter a complete ISO-8601 timestamp, for example 2026-09-03T12:30:00+05:30.', error: true);
+      return;
+    }
+    await _run('clock', 'SET_TIME:${DeviceContract.deviceTimestamp(timestamp)}');
   }
 
   Future<void> _role() async {
@@ -273,6 +283,8 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       padding: const EdgeInsets.all(16),
       children: [
         Text('Connected device', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        Text('Master: ${controller.masterSerial} - ${controller.reportingSlaveCount} slave(s) reporting'),
         const SizedBox(height: 8),
         _CalibrationBlock(status: status, liveReading: directReading, detectedTemp: _lastDetectedTemp, detectedVoltage: _lastDetectedVoltage),
         const SizedBox(height: 20),

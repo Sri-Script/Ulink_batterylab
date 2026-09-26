@@ -23,6 +23,7 @@ class BleDeviceConnection implements app.DeviceConnection {
   bool _isDeviceConnected = false;
   bool _notificationsEnabled = false;
   bool _notificationSetupInProgress = false;
+  bool _developerModeOpen = false;
   Future<bool>? _connectInFlight;
   Future<void> _gattTail = Future<void>.value();
   final _liveReadingsController = StreamController<Map<String, dynamic>>.broadcast();
@@ -123,6 +124,7 @@ class BleDeviceConnection implements app.DeviceConnection {
         }
         if (!_isDeviceConnected) {
           _notificationsEnabled = false;
+          _developerModeOpen = false;
           final notifications = _notificationSubscription;
           _notificationSubscription = null;
           notifications?.cancel();
@@ -178,6 +180,7 @@ class BleDeviceConnection implements app.DeviceConnection {
       _ensureConnectedForSetup('notification subscription');
       await _startNotificationStream(_txCharacteristic!);
       await _subscribeToNotifications(_txCharacteristic!);
+      await _openDeveloperMode();
       _stateController.add(app.ConnectionState.connected);
       _log('Nordic UART ready: RX=${_rxCharacteristic!.uuid}, TX=${_txCharacteristic!.uuid}');
       return true;
@@ -190,6 +193,7 @@ class BleDeviceConnection implements app.DeviceConnection {
       _isDeviceConnected = false;
       _notificationsEnabled = false;
       _notificationSetupInProgress = false;
+      _developerModeOpen = false;
       try {
         await _device?.disconnect();
       } catch (disconnectError) {
@@ -267,6 +271,7 @@ class BleDeviceConnection implements app.DeviceConnection {
     _isDeviceConnected = false;
     _notificationsEnabled = false;
     _notificationSetupInProgress = false;
+    _developerModeOpen = false;
     _txCharacteristic = null;
     _rxCharacteristic = null;
     final pending = _pendingResponse;
@@ -309,6 +314,26 @@ class BleDeviceConnection implements app.DeviceConnection {
       _notificationsEnabled = true;
     } finally {
       _notificationSetupInProgress = false;
+    }
+  }
+
+  Future<void> _openDeveloperMode() async {
+    if (_developerModeOpen) return;
+    _log('opening developer mode');
+    try {
+      final response = await command('DEV_OPEN');
+      final decoded = jsonDecode(response);
+      if (decoded is! Map || decoded['developer_mode'] != true) {
+        throw StateError('DEV_OPEN was not confirmed by the device: $response');
+      }
+      _developerModeOpen = true;
+      _log('developer mode confirmed');
+    } catch (error) {
+      _developerModeOpen = false;
+      throw StateError(
+        'Developer mode could not be unlocked. Reconnect and try again. '
+        'Device response: $error',
+      );
     }
   }
 
@@ -420,6 +445,10 @@ class BleDeviceConnection implements app.DeviceConnection {
   Future<String> command(String command) async {
     _ensureReady();
     if (_pendingResponse != null) throw StateError('Another device command is already awaiting a response.');
+    command = _normalizedCommand(command);
+    if (_requiresDeveloperMode(command) && !_developerModeOpen) {
+      throw StateError('Developer mode is not unlocked. Reconnect and try again.');
+    }
     final completer = Completer<String>();
     _pendingResponse = completer;
     try {
@@ -464,6 +493,27 @@ class BleDeviceConnection implements app.DeviceConnection {
     }
   }
 
+  String _normalizedCommand(String command) {
+    if (!command.startsWith('SET_TIME:')) return command;
+    final value = command.substring('SET_TIME:'.length).trim();
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null) {
+      throw ArgumentError('SET_TIME requires a complete ISO-8601 timestamp.');
+    }
+    return 'SET_TIME:${DeviceContract.deviceTimestamp(parsed)}';
+  }
+
+  bool _requiresDeveloperMode(String command) =>
+      command == 'GET_CAL' ||
+      command == 'GET_DEV_MODE' ||
+      command.startsWith('CAL_TEMP:') ||
+      command.startsWith('CAL_VOLT:') ||
+      command.startsWith('SET_TIME:') ||
+      command.startsWith('SET_SN:') ||
+      command == 'MAKE_MASTER' ||
+      command == 'MAKE_AVAILABLE' ||
+      command.startsWith('RESET');
+
   void _onNotification(List<int> bytes) {
     _receiveBuffer += utf8.decode(bytes, allowMalformed: true);
     var newline = _receiveBuffer.indexOf('\n');
@@ -478,7 +528,8 @@ class BleDeviceConnection implements app.DeviceConnection {
   void _handleLine(String line) {
     try {
       final decoded = jsonDecode(line);
-      if (decoded is Map && decoded.containsKey('node') && decoded.containsKey('serial')) {
+      if (decoded is Map &&
+          (decoded.containsKey('serial') || decoded.containsKey('node'))) {
         _liveReadingsController.add(Map<String, dynamic>.from(decoded));
         return;
       }

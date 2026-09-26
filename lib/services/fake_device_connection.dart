@@ -88,6 +88,7 @@ class FakeDeviceConnection implements DeviceConnection {
     _ensureConnected();
     await Future<void>.delayed(const Duration(milliseconds: 150));
     final input = command.trim();
+    if (input == 'DEV_OPEN') return '{"developer_mode":true}';
     if (input == 'GET_SN') return 'SN:BATTERY-001';
     if (input.startsWith('SET_SN:')) return 'SN UPDATED';
     if (input == 'GET_CAL') return '{"serial":"BATTERY-001","temp_factor":1.0,"temp_true_ref":25.0,"temp_calibrated":true,"volt_factor":1.0,"volt_true_ref":3.7,"volt_calibrated":true}';

@@ -91,6 +91,17 @@ class DeviceContract {
   static String _normalizeBleDeviceId(String value) =>
       value.trim().replaceAll('-', ':').toUpperCase();
 
+  /// Firmware requires a complete local ISO-8601 timestamp including a
+  /// numeric UTC offset, not Dart's offset-less [DateTime.toIso8601String()].
+  static String deviceTimestamp(DateTime value) {
+    final offset = value.timeZoneOffset;
+    final sign = offset.isNegative ? '-' : '+';
+    String two(int part) => part.abs().toString().padLeft(2, '0');
+    return '${value.year.toString().padLeft(4, '0')}-${two(value.month)}-${two(value.day)}'
+        'T${two(value.hour)}:${two(value.minute)}:${two(value.second)}'
+        '$sign${two(offset.inHours)}:${two(offset.inMinutes.remainder(60))}';
+  }
+
   /// Example: ULINK-GW1234 -> ULINK-GW-GW1234.
   static String advertisingNameFor(String deviceId) {
     final serial = deviceId.startsWith('ULINK-')
