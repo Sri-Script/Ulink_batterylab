@@ -43,12 +43,14 @@ class ConnectionController extends ChangeNotifier {
   final Map<String, DateTime> _lastSeenByDevice = {};
   String? _masterSerial;
   String? _masterNodeIdentity;
+  String? _deviceRole;
 
   device.DeviceConnection? get connection => _connection;
   Map<String, dynamic>? get liveStatus => _liveStatus;
   List<Map<String, dynamic>> get liveDevices => _liveDevicesBySerial.values.toList();
   int liveUpdateSequence(String serial) => _liveUpdateSequences[serial] ?? 0;
   String get masterSerial => _masterSerial ?? descriptor?.deviceId ?? 'Unknown';
+  String get deviceRole => _deviceRole ?? 'N/A';
   int get reportingSlaveCount {
     final master = _masterSerial;
     return _lastSeenByDevice.keys
@@ -99,6 +101,7 @@ class ConnectionController extends ChangeNotifier {
     _lastSeenByDevice.clear();
     _masterSerial = null;
     _masterNodeIdentity = null;
+    _deviceRole = null;
     connecting = true;
     connectionState = reconnect
         ? device.ConnectionState.reconnecting
@@ -147,11 +150,13 @@ class ConnectionController extends ChangeNotifier {
       try {
         final role = _jsonMap(await candidate.command('GET_ROLE'));
         _masterSerial = role['serial']?.toString();
+        _deviceRole = role['role']?.toString();
         final node = role['node']?.toString().trim();
         _masterNodeIdentity = node == null || node.isEmpty ? null : 'node:$node';
       } catch (_) {
         _masterSerial = null;
         _masterNodeIdentity = null;
+        _deviceRole = null;
       }
       try {
         calibrationStatus = _jsonMap(await candidate.command('GET_CAL'));
@@ -209,6 +214,7 @@ class ConnectionController extends ChangeNotifier {
     _lastSeenByDevice.clear();
     _masterSerial = null;
     _masterNodeIdentity = null;
+    _deviceRole = null;
     connectionState = device.ConnectionState.disconnected;
     notifyListeners();
   }

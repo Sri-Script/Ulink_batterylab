@@ -8,6 +8,7 @@ import '../config/device_contract.dart';
 import '../providers/connection_controller.dart';
 import '../services/device_connection.dart' as device;
 import '../widgets/connection_status_pill.dart';
+import 'calibration_history_screen.dart';
 
 class CalibrationScreen extends StatefulWidget {
   const CalibrationScreen({super.key});
@@ -255,6 +256,13 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
           title: Text(descriptor.deviceId),
           actions: [
             Center(child: ConnectionStatusPill(state: controller.connectionState)),
+            IconButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const CalibrationHistoryScreen()),
+              ),
+              icon: const Icon(Icons.history),
+              tooltip: 'Calibration history',
+            ),
             IconButton(onPressed: () async { await controller.disconnect(); if (context.mounted) Navigator.pop(context); }, icon: const Icon(Icons.link_off)),
           ],
           bottom: const TabBar(tabs: [Tab(icon: Icon(Icons.monitor_heart), text: 'Live'), Tab(icon: Icon(Icons.tune), text: 'Calibration')]),
