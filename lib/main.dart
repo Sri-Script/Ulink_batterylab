@@ -1,4 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:provider/provider.dart';
@@ -6,7 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/app_config.dart';
 import 'providers/connection_controller.dart';
+import 'screens/calibration_history_screen.dart';
+import 'screens/design_mode_screen.dart';
+import 'screens/live_data_viewer_screen.dart';
+import 'screens/login_screen.dart';
 import 'screens/scanner_screen.dart';
+import 'screens/wifi_provisioning_screen.dart';
 import 'services/app_telemetry_notification_controller.dart';
 import 'services/local_notification_service.dart';
 
@@ -40,7 +46,7 @@ class _BatteryLabAppState extends State<BatteryLabApp> {
   Widget build(BuildContext context) => ChangeNotifierProvider(
     create: (_) => ConnectionController(),
     child: MaterialApp(
-      title: 'Ulink Programmer',
+      title: 'BattMobile',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -98,16 +104,15 @@ class _LaunchGateState extends State<_LaunchGate> {
 
   Future<void> _initialize() async {
     var disclaimerAcknowledged = false;
-    final loadDisclaimer = _loadDisclaimerAcknowledgement().then((value) {
-      disclaimerAcknowledged = value;
-    }).catchError((_) {
-      // Treat an unavailable preference store as a first launch.
-    });
+    final loadDisclaimer = _loadDisclaimerAcknowledgement()
+        .then((value) {
+          disclaimerAcknowledged = value;
+        })
+        .catchError((_) {
+          // Treat an unavailable preference store as a first launch.
+        });
 
-    await Future.wait<dynamic>([
-      _initializeServices(),
-      loadDisclaimer,
-    ]).timeout(
+    await Future.wait<dynamic>([_initializeServices(), loadDisclaimer]).timeout(
       AppConfig.splashMaxWait,
       onTimeout: () {
         // Services continue in the background; the app remains usable.
@@ -176,11 +181,106 @@ class _LaunchGateState extends State<_LaunchGate> {
     final showDisclaimer = _showDisclaimer;
     if (showDisclaimer == null) return const _SplashScreen();
     if (!showDisclaimer) {
-      return ScannerScreen(
-        bluetoothNeedsAttention: _bluetoothNeedsAttention,
-      );
+      return _RootNavigation(bluetoothNeedsAttention: _bluetoothNeedsAttention);
     }
     return _DisclaimerScreen(onAcknowledge: _acknowledgeDisclaimer);
+  }
+}
+
+class _RootNavigation extends StatefulWidget {
+  const _RootNavigation({required this.bluetoothNeedsAttention});
+  final bool bluetoothNeedsAttention;
+  @override
+  State<_RootNavigation> createState() => _RootNavigationState();
+}
+
+class _RootNavigationState extends State<_RootNavigation> {
+  int _selectedIndex = 0;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: IndexedStack(
+      index: _selectedIndex,
+      children: [
+        ScannerScreen(bluetoothNeedsAttention: widget.bluetoothNeedsAttention),
+        DesignModeScreen(),
+        CalibrationHistoryScreen(),
+        const _LiveDataTab(),
+      ],
+    ),
+    bottomNavigationBar: NavigationBar(
+      selectedIndex: _selectedIndex,
+      onDestinationSelected: (index) => setState(() => _selectedIndex = index),
+      indicatorColor: Theme.of(
+        context,
+      ).colorScheme.primary.withValues(alpha: .24),
+      destinations: const [
+        NavigationDestination(
+          icon: Icon(Icons.qr_code_scanner_outlined),
+          selectedIcon: Icon(Icons.qr_code_scanner),
+          label: 'Scan / Connect',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.dashboard_outlined),
+          selectedIcon: Icon(Icons.dashboard),
+          label: 'Design Mode',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.history_outlined),
+          selectedIcon: Icon(Icons.history),
+          label: 'History',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.cloud_outlined),
+          selectedIcon: Icon(Icons.cloud),
+          label: 'Live Data',
+        ),
+      ],
+    ),
+    drawer: Drawer(
+      child: SafeArea(
+        child: ListView(
+          children: [
+            const DrawerHeader(child: Text('BattMobile')),
+            ListTile(
+              leading: const Icon(Icons.wifi),
+              title: const Text('Wi-Fi Provisioning'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const WifiProvisioningScreen(),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Keeps the existing LoginScreen -> LiveDataViewerScreen Navigator flow
+/// inside the Live Data tab. LoginScreen's pushReplacement therefore replaces
+/// only this tab's page and never the outer navigation shell.
+class _LiveDataTab extends StatelessWidget {
+  const _LiveDataTab();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget initialPage;
+    try {
+      initialPage = FirebaseAuth.instance.currentUser == null
+          ? const LoginScreen()
+          : const LiveDataViewerScreen();
+    } catch (_) {
+      initialPage = const LoginScreen();
+    }
+    return Navigator(
+      onGenerateRoute: (_) =>
+          MaterialPageRoute<void>(builder: (_) => initialPage),
+    );
   }
 }
 
@@ -219,7 +319,10 @@ class _DisclaimerScreen extends StatelessWidget {
         children: [
           const Icon(Icons.privacy_tip_outlined, size: 44),
           const SizedBox(height: 20),
-          Text('Important information', style: Theme.of(context).textTheme.headlineSmall),
+          Text(
+            'Important information',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
           const SizedBox(height: 12),
           const Text(
             'Placeholder disclaimer: this app handles BLE/Wi-Fi connection credentials and presents device data that may be delayed, incomplete, or inaccurate. Confirm critical readings using approved equipment and follow your organization\'s data-handling requirements. Replace this text with approved legal language before release.',
@@ -237,4 +340,5 @@ class _DisclaimerScreen extends StatelessWidget {
     ),
   );
 }
+
 //to be updated

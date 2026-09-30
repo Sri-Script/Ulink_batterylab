@@ -33,6 +33,7 @@ class DeviceContract {
   /// BLE advertising-name prefixes observed in real deployments.
   static const List<String> advertisingNamePrefixes = [
     'ULINK-GW-',
+    'VoltTHERM',
   ];
 
   /// Confirmed ESP BLE labels that are not part of the gateway prefix.
