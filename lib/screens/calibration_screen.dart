@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../config/device_contract.dart';
@@ -72,10 +73,67 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _reference(bool temperature) async {
-    final value = await _ask('True ${temperature ? 'temperature' : 'voltage'} reference');
+    final value = await _askCalibrationReference(temperature);
     if (value != null) {
       await _run(temperature ? 'temp' : 'volt', '${temperature ? 'CAL_TEMP' : 'CAL_VOLT'}:$value');
     }
+  }
+
+  Future<String?> _askCalibrationReference(bool temperature) async {
+    final textController = TextEditingController();
+    final connection = context.read<ConnectionController>();
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AnimatedBuilder(
+        animation: connection,
+        builder: (_, __) {
+          final ready = temperature
+              ? connection.hasLiveTemperatureReading
+              : connection.hasLiveVoltageReading;
+          return AlertDialog(
+            title: Text('True ${temperature ? 'temperature' : 'voltage'} reference'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: textController,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  decoration: const InputDecoration(border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 12),
+                if (ready)
+                  const Text('Live reading received. Calibration is ready.')
+                else
+                  const Row(
+                    children: [
+                      SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      SizedBox(width: 10),
+                      Expanded(child: Text('Waiting for a live reading from the device...')),
+                    ],
+                  ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: !ready
+                    ? null
+                    : () {
+                        final text = textController.text.trim();
+                        if (text.isEmpty) return;
+                        Navigator.pop(dialogContext, text);
+                      },
+                child: const Text('Continue'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    textController.dispose();
+    return value;
   }
 
   Future<String?> _ask(String title, {String? hint, bool allowEmpty = false}) async {
@@ -110,13 +168,65 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   Future<void> _serial() async {
     final current = await context.read<ConnectionController>().command('GET_SN', logKey: 'serial');
     if (!mounted) return;
-    final value = await _ask('Serial number', hint: 'Current: $current');
+    final currentSuffix = current.startsWith('SN:BATTERY-')
+        ? current.substring('SN:BATTERY-'.length)
+        : '';
+    final value = await _askSerialSuffix(currentSuffix);
     if (value == null) return;
-    if (!DeviceContract.serialPattern.hasMatch(value)) {
-      _message('Serial must use the BATTERY-... format.', error: true);
-      return;
-    }
     await _run('serial', 'SET_SN:$value');
+  }
+
+  Future<String?> _askSerialSuffix(String initialSuffix) async {
+    final field = TextEditingController(text: initialSuffix);
+    String? error;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (_, setDialogState) {
+          final suffix = field.text;
+          final valid = RegExp(r'^\d{1,3}$').hasMatch(suffix);
+          return AlertDialog(
+            title: const Text('Serial number'),
+            content: TextField(
+              controller: field,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              onChanged: (value) => setDialogState(
+                () => error = RegExp(r'^\d{1,3}$').hasMatch(value)
+                    ? null
+                    : 'Enter between 1 and 3 digits.',
+              ),
+              decoration: InputDecoration(
+                prefixText: 'BATTERY-',
+                border: const OutlineInputBorder(),
+                helperText: 'Enter 1 to 3 digits. Example: 7 becomes BATTERY-007.',
+                errorText: error,
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: !valid
+                    ? null
+                    : () {
+                        final normalized = suffix.padLeft(3, '0');
+                        final serial = 'BATTERY-$normalized';
+                        if (!DeviceContract.serialPattern.hasMatch(serial)) {
+                          setDialogState(() => error = 'Enter between 1 and 3 digits.');
+                          return;
+                        }
+                        Navigator.pop(dialogContext, serial);
+                      },
+                child: const Text('Continue'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    field.dispose();
+    return result;
   }
 
   Future<void> _clock() async {
@@ -201,7 +311,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
             : Theme.of(dialogContext).colorScheme.primary,
         size: 40,
       ),
-      title: Text(failed ? 'Command failed' : 'Sent successfully'),
+      title: Text(failed ? (_deviceError(decoded) ?? 'Command failed') : 'Sent successfully'),
       content: SingleChildScrollView(
         child: SelectableText(
           'Sent:\n$command\n\nDevice response:\n${_responseDetails(response, decoded)}',
@@ -233,6 +343,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     if (decoded == null) return response.trim();
     return const JsonEncoder.withIndent('  ').convert(decoded);
   }
+  String? _deviceError(Map<String, dynamic>? decoded) => decoded?['error']?.toString();
 
   Map<String, dynamic>? _json(String value) {
     try { final decoded = jsonDecode(value); return decoded is Map ? Map<String, dynamic>.from(decoded) : null; }

@@ -95,7 +95,11 @@ class FakeDeviceConnection implements DeviceConnection {
     if (input == 'GET_ROLE') return '{"serial":"BATTERY-001","role":"AVAILABLE"}';
     if (input == 'GET_TIME') return 'TIME:${DateTime.now().toIso8601String()}';
     if (input.startsWith('SET_TIME:')) return 'TIME UPDATED';
-    if (input.startsWith('CAL_TEMP:') || input.startsWith('CAL_VOLT:')) return '{"serial":"BATTERY-001","detected_temp":24.8,"true_temp":25.0,"temp_factor":1.008,"calibrated_temp":25.0}';
+    if (input.startsWith('CAL_TEMP:')) return '{"serial":"BATTERY-001","detected_temp":24.8,"true_temp":25.0,"temp_factor":1.008,"calibrated_temp":25.0}';
+    if (input.startsWith('CAL_VOLT:')) return '{"serial":"BATTERY-001","detected_volt":3.68,"true_volt":3.70,"volt_factor":1.005,"calibrated_volt":3.70}';
+    if (input == 'RESET_TEMP_CAL') return '{"result":"TEMP_CAL_RESET"}';
+    if (input == 'RESET_VOLT_CAL') return '{"result":"VOLT_CAL_RESET"}';
+    if (input == 'RESET_CAL') return '{"result":"CAL_RESET"}';
     return '{"serial":"BATTERY-001","ok":true}';
   }
 

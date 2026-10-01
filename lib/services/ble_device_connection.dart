@@ -28,6 +28,7 @@ class BleDeviceConnection implements app.DeviceConnection {
   Future<void> _gattTail = Future<void>.value();
   final _liveReadingsController = StreamController<Map<String, dynamic>>.broadcast();
   Completer<String>? _pendingResponse;
+  String? _pendingCommand;
   String _receiveBuffer = '';
 
   @override
@@ -279,6 +280,7 @@ class BleDeviceConnection implements app.DeviceConnection {
       pending.completeError(StateError('Device disconnected.'));
     }
     _pendingResponse = null;
+    _pendingCommand = null;
     _stateController.add(app.ConnectionState.disconnected);
     _log('disconnect complete');
   }
@@ -451,6 +453,7 @@ class BleDeviceConnection implements app.DeviceConnection {
     }
     final completer = Completer<String>();
     _pendingResponse = completer;
+    _pendingCommand = command;
     try {
       _log('writing command: $command');
       final payload = utf8.encode(command.endsWith('\n') ? command : '$command\n');
@@ -481,7 +484,10 @@ class BleDeviceConnection implements app.DeviceConnection {
       _log('command failure for "$command": $error');
       rethrow;
     } finally {
-      if (identical(_pendingResponse, completer)) _pendingResponse = null;
+      if (identical(_pendingResponse, completer)) {
+        _pendingResponse = null;
+        _pendingCommand = null;
+      }
     }
   }
 
@@ -526,30 +532,110 @@ class BleDeviceConnection implements app.DeviceConnection {
   }
 
   void _handleLine(String line) {
+    Map<String, dynamic>? decoded;
     try {
-      final decoded = jsonDecode(line);
-      if (decoded is Map &&
-          (decoded.containsKey('serial') || decoded.containsKey('node'))) {
-        _liveReadingsController.add(Map<String, dynamic>.from(decoded));
-        return;
-      }
+      final value = jsonDecode(line);
+      if (value is Map) decoded = Map<String, dynamic>.from(value);
     } on FormatException {
       // Text responses such as SN:... and TIME:... are expected.
     }
+
     final pending = _pendingResponse;
-    if (pending != null && !pending.isCompleted) {
-      pending.complete(line);
+    final command = _pendingCommand;
+    if (pending != null && !pending.isCompleted && command != null) {
+      if (!_isTelemetry(decoded) &&
+          _matchesPendingResponse(command, line, decoded)) {
+        pending.complete(line);
+        return;
+      }
+    }
+
+    // Telemetry can be interleaved with a command response. It must never
+    // complete the pending command; forward it to the normal live stream.
+    if (decoded != null) {
+      _liveReadingsController.add(decoded);
+      if (!_isTelemetry(decoded)) {
+        _log('unmatched JSON notification forwarded to live stream: $line');
+      }
     } else {
       _log('unsolicited non-reading line ignored: $line');
     }
   }
+
+  bool _matchesPendingResponse(
+    String command,
+    String line,
+    Map<String, dynamic>? response,
+  ) {
+    if (response?['error'] != null) return true;
+    if (command == 'GET_SN') return line.startsWith('SN:');
+    if (command == 'GET_TIME') return line.startsWith('TIME:');
+    if (command.startsWith('SET_SN:')) return line == 'SN UPDATED';
+    if (command.startsWith('SET_TIME:')) return line == 'TIME UPDATED';
+    if (response == null) return false;
+
+    switch (command) {
+      case 'DEV_OPEN':
+        return response['developer_mode'] == true;
+      case 'GET_DEV_MODE':
+        return response.containsKey('developer_mode');
+      case 'GET_ROLE':
+        return _isRole(response['role']);
+      case 'GET_CAL':
+        return _hasAnyKey(response, const [
+          'temp_factor',
+          'volt_factor',
+          'voltage_factor',
+          'temp_true_ref',
+          'volt_true_ref',
+          'temp_calibrated',
+          'volt_calibrated',
+        ]);
+      case 'GET_STATUS':
+        return _hasAnyKey(response, const ['batteryCount', 'devices', 'mesh']);
+      case 'MAKE_MASTER':
+        return _isRole(response['role']) || response['result']?.toString().contains('MASTER') == true;
+      case 'MAKE_AVAILABLE':
+        return _isRole(response['role']) || response['result']?.toString().contains('AVAILABLE') == true;
+      case 'RESET_TEMP_CAL':
+        return response['result'] == 'TEMP_CAL_RESET';
+      case 'RESET_VOLT_CAL':
+        return response['result'] == 'VOLT_CAL_RESET';
+      case 'RESET_CAL':
+        return response['result'] == 'CAL_RESET';
+    }
+    if (command.startsWith('CAL_TEMP:')) {
+      return _hasAnyKey(response, const [
+        'detected_temp', 'detected_temperature', 'true_temp', 'temp_factor',
+      ]);
+    }
+    if (command.startsWith('CAL_VOLT:')) {
+      return _hasAnyKey(response, const [
+        'detected_volt', 'detected_voltage', 'true_volt', 'volt_factor', 'voltage_factor',
+      ]);
+    }
+    return response['ok'] == true || response['success'] == true || response.containsKey('result');
+  }
+
+  bool _isTelemetry(Map<String, dynamic>? response) =>
+      response != null &&
+      response.containsKey('temperature') &&
+      response.containsKey('voltage');
+
+  bool _hasAnyKey(Map<String, dynamic> values, List<String> keys) =>
+      keys.any(values.containsKey);
+
+  bool _isRole(dynamic value) =>
+      const {'MASTER', 'SLAVE', 'AVAILABLE'}.contains(value?.toString().toUpperCase());
 
   String _readCommand(String key) => switch (key) {
     'serial' => 'GET_SN', 'calibration' => 'GET_CAL', 'role' => 'GET_ROLE', 'clock' => 'GET_TIME', _ => throw ArgumentError('Unknown read key: $key'),
   };
   String _writeCommand(String key, dynamic value, DateTime? _) => switch (key) {
     'serial' => 'SET_SN:$value', 'temperature' => 'CAL_TEMP:$value', 'voltage' => 'CAL_VOLT:$value',
-    'resetTemp' => 'RESET_TEMP_CAL', 'resetVolt' => 'RESET_VOLT_CAL', 'resetAll' => 'RESET_CAL',
+    'resetTemp' => 'RESET_TEMP_CAL',
+    'resetVolt' => 'RESET_VOLT_CAL',
+    'resetAll' => 'RESET_CAL',
     'master' => 'MAKE_MASTER', 'available' => 'MAKE_AVAILABLE', 'clock' => 'SET_TIME:$value',
     _ => throw ArgumentError('Unknown write key: $key'),
   };

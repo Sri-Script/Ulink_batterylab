@@ -41,6 +41,8 @@ class ConnectionController extends ChangeNotifier {
   final Map<String, Map<String, dynamic>> _liveDevicesBySerial = {};
   final Map<String, int> _liveUpdateSequences = {};
   final Map<String, DateTime> _lastSeenByDevice = {};
+  bool _hasLiveTemperatureReading = false;
+  bool _hasLiveVoltageReading = false;
   String? _masterSerial;
   String? _masterNodeIdentity;
   String? _deviceRole;
@@ -49,6 +51,10 @@ class ConnectionController extends ChangeNotifier {
   Map<String, dynamic>? get liveStatus => _liveStatus;
   List<Map<String, dynamic>> get liveDevices => _liveDevicesBySerial.values.toList();
   int liveUpdateSequence(String serial) => _liveUpdateSequences[serial] ?? 0;
+  /// A calibration is permitted only after this connection has received the
+  /// corresponding non-null telemetry value from the directly connected node.
+  bool get hasLiveTemperatureReading => _hasLiveTemperatureReading;
+  bool get hasLiveVoltageReading => _hasLiveVoltageReading;
   String get masterSerial => _masterSerial ?? descriptor?.deviceId ?? 'Unknown';
   String get deviceRole => _deviceRole ?? 'N/A';
   int get reportingSlaveCount {
@@ -99,6 +105,8 @@ class ConnectionController extends ChangeNotifier {
     _liveDevicesBySerial.clear();
     _liveUpdateSequences.clear();
     _lastSeenByDevice.clear();
+    _hasLiveTemperatureReading = false;
+    _hasLiveVoltageReading = false;
     _masterSerial = null;
     _masterNodeIdentity = null;
     _deviceRole = null;
@@ -140,6 +148,9 @@ class ConnectionController extends ChangeNotifier {
         _lastSeenByDevice.removeWhere(
           (_, lastSeen) => now.difference(lastSeen) > const Duration(seconds: 60),
         );
+        if (_isConnectedDeviceReading(identity)) {
+          _recordConnectedDeviceReading(reading);
+        }
         notifyListeners();
       });
       descriptor = target;
@@ -153,6 +164,7 @@ class ConnectionController extends ChangeNotifier {
         _deviceRole = role['role']?.toString();
         final node = role['node']?.toString().trim();
         _masterNodeIdentity = node == null || node.isEmpty ? null : 'node:$node';
+        _captureExistingConnectedDeviceReading();
       } catch (_) {
         _masterSerial = null;
         _masterNodeIdentity = null;
@@ -212,6 +224,8 @@ class ConnectionController extends ChangeNotifier {
     _liveDevicesBySerial.clear();
     _liveUpdateSequences.clear();
     _lastSeenByDevice.clear();
+    _hasLiveTemperatureReading = false;
+    _hasLiveVoltageReading = false;
     _masterSerial = null;
     _masterNodeIdentity = null;
     _deviceRole = null;
@@ -304,6 +318,31 @@ class ConnectionController extends ChangeNotifier {
     if (serial != null && serial.isNotEmpty) return serial;
     final node = reading['node']?.toString().trim();
     return node == null || node.isEmpty ? null : 'node:$node';
+  }
+
+  bool _isConnectedDeviceReading(String identity) {
+    final serial = _masterSerial;
+    if (serial != null && serial.isNotEmpty) return identity == serial;
+    final node = _masterNodeIdentity;
+    return node != null && node.isNotEmpty && identity == node;
+  }
+
+  void _captureExistingConnectedDeviceReading() {
+    for (final entry in _liveDevicesBySerial.entries) {
+      if (_isConnectedDeviceReading(entry.key)) {
+        _recordConnectedDeviceReading(entry.value);
+        return;
+      }
+    }
+  }
+
+  void _recordConnectedDeviceReading(Map<String, dynamic> reading) {
+    if (reading['temperature'] != null || reading['temp'] != null) {
+      _hasLiveTemperatureReading = true;
+    }
+    if (reading['voltage'] != null || reading['volt'] != null) {
+      _hasLiveVoltageReading = true;
+    }
   }
 
   Future<void> _recordFailure(
