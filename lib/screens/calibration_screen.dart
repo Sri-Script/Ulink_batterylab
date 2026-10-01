@@ -176,6 +176,70 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     await _run('serial', 'SET_SN:$value');
   }
 
+  Future<void> _renameDevice(ConnectionController connection) async {
+    final field = TextEditingController(text: connection.deviceName(connection.descriptor!));
+    String? error;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AnimatedBuilder(
+        animation: connection,
+        builder: (_, __) => StatefulBuilder(
+          builder: (_, setDialogState) {
+            final connected = connection.connectionState == device.ConnectionState.connected;
+            final trimmed = field.text.trim();
+            final valid = trimmed.isNotEmpty && trimmed.length <= 20;
+            return AlertDialog(
+              title: const Text('Rename device'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: field,
+                    autofocus: true,
+                    enabled: connected,
+                    onChanged: (value) => setDialogState(
+                      () => error = value.trim().isEmpty
+                          ? 'Name cannot be empty.'
+                          : value.trim().length > 20
+                          ? 'Name must be 20 characters or fewer.'
+                          : null,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: 'Device name',
+                      errorText: error,
+                    ),
+                  ),
+                  if (!connected)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text('Device disconnected. Reconnect before renaming.'),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+                FilledButton(
+                  onPressed: connected && valid
+                      ? () => Navigator.pop(dialogContext, trimmed)
+                      : null,
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    field.dispose();
+    if (name == null || !mounted) return;
+    try {
+      await connection.renameConnectedDevice(name);
+    } catch (error) {
+      if (mounted) _message(_clean(error), error: true);
+    }
+  }
+
   Future<String?> _askSerialSuffix(String initialSuffix) async {
     final field = TextEditingController(text: initialSuffix);
     String? error;
@@ -364,9 +428,14 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(descriptor.deviceId),
+          title: Text(controller.deviceName(descriptor)),
           actions: [
             Center(child: ConnectionStatusPill(state: controller.connectionState)),
+            IconButton(
+              onPressed: connected ? () => _renameDevice(controller) : null,
+              icon: const Icon(Icons.edit),
+              tooltip: 'Rename device',
+            ),
             IconButton(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(builder: (_) => const CalibrationHistoryScreen()),

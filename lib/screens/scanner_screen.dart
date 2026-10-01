@@ -188,7 +188,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final success = await controller.connect(descriptor, reconnect: reconnect);
     if (!mounted) return;
     if (success) {
-      await _showConnectedDialog(descriptor.deviceId);
+      await _showConnectedDialog(controller.deviceName(descriptor));
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const CalibrationScreen()),
@@ -510,7 +510,10 @@ class _WifiDiscoverySheetState extends State<_WifiDiscoverySheet> {
   final _ip = TextEditingController();
   final _port = TextEditingController(text: '80');
 
-  void _retry() => setState(() => _results = WifiGatewayDiscovery().discover());
+  void _retry() {
+    context.read<ConnectionController>().refreshDeviceNames();
+    setState(() => _results = WifiGatewayDiscovery().discover());
+  }
 
   void _manualConnect() {
     final id = _deviceId.text.trim().toUpperCase();
@@ -549,7 +552,9 @@ class _WifiDiscoverySheetState extends State<_WifiDiscoverySheet> {
   }
 
   @override
-  Widget build(BuildContext context) => SafeArea(
+  Widget build(BuildContext context) {
+    final controller = context.watch<ConnectionController>();
+    return SafeArea(
     child: Padding(
       padding: EdgeInsets.fromLTRB(
         20,
@@ -602,7 +607,7 @@ class _WifiDiscoverySheetState extends State<_WifiDiscoverySheet> {
                         (gateway) => Card(
                       child: ListTile(
                         leading: const Icon(Icons.router),
-                        title: Text(gateway.descriptor.deviceId),
+                        title: Text(controller.deviceName(gateway.descriptor)),
                         subtitle: Text(
                           '${gateway.descriptor.ip}:${gateway.descriptor.port} • ${gateway.batteryCount ?? '?'} batteries',
                         ),
@@ -664,6 +669,7 @@ class _WifiDiscoverySheetState extends State<_WifiDiscoverySheet> {
       ),
     ),
   );
+  }
 }
 
 class _PermissionMessage extends StatelessWidget {

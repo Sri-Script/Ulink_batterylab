@@ -15,6 +15,7 @@ class DeviceDescriptor {
     this.meshNodeId,
     this.advertisingName,
     this.bleDeviceId,
+    this.name,
   });
 
   final TransportType mode;
@@ -28,6 +29,44 @@ class DeviceDescriptor {
   /// Platform BLE identifier (MAC on Android when exposed). Kept separately
   /// from the display/device label so unnamed peripherals remain selectable.
   final String? bleDeviceId;
+  /// A user-assigned display name. Device communication always uses [deviceId]
+  /// and [stableId], never this mutable value.
+  final String? name;
+
+  /// Stable storage key: Android BLE remote ID/MAC where available, otherwise
+  /// the firmware/device ID used by the existing Wi-Fi and QR flows.
+  String get stableId {
+    final bleId = bleDeviceId?.trim();
+    return bleId != null && bleId.isNotEmpty ? bleId : deviceId;
+  }
+
+  String get defaultName {
+    final advertised = advertisingName?.trim();
+    if (advertised != null && advertised.isNotEmpty) return advertised;
+    if (deviceId.trim().isNotEmpty && !deviceId.startsWith('BLE-')) {
+      return deviceId;
+    }
+    final compactId = stableId.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+    final suffix = compactId.length <= 4
+        ? compactId
+        : compactId.substring(compactId.length - 4);
+    return 'VTM-${suffix.toUpperCase()}';
+  }
+
+  String get displayName => name?.trim().isNotEmpty == true ? name!.trim() : defaultName;
+
+  DeviceDescriptor copyWith({String? name}) => DeviceDescriptor(
+    mode: mode,
+    deviceId: deviceId,
+    serviceUuid: serviceUuid,
+    ip: ip,
+    port: port,
+    gatewayId: gatewayId,
+    meshNodeId: meshNodeId,
+    advertisingName: advertisingName,
+    bleDeviceId: bleDeviceId,
+    name: name,
+  );
 
   factory DeviceDescriptor.fromScannedPayload(
     String raw, {
@@ -109,7 +148,9 @@ class DeviceDescriptor {
   }
 
   factory DeviceDescriptor.fromJson(Map<String, dynamic> json) =>
-      DeviceDescriptor.fromQr(jsonEncode(json));
+      DeviceDescriptor.fromQr(jsonEncode(json)).copyWith(
+        name: json['name']?.toString(),
+      );
 
   Map<String, dynamic> toJson() => {
     'mode': mode.name,
@@ -121,6 +162,7 @@ class DeviceDescriptor {
     if (meshNodeId != null) 'meshNodeId': meshNodeId,
     if (advertisingName != null) 'advertisingName': advertisingName,
     if (bleDeviceId != null) 'bleDeviceId': bleDeviceId,
+    if (name != null) 'name': name,
   };
 
   static bool isValidIpv4(String value) {

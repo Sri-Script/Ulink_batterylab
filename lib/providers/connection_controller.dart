@@ -41,6 +41,7 @@ class ConnectionController extends ChangeNotifier {
   final Map<String, Map<String, dynamic>> _liveDevicesBySerial = {};
   final Map<String, int> _liveUpdateSequences = {};
   final Map<String, DateTime> _lastSeenByDevice = {};
+  Map<String, String> _deviceNames = {};
   bool _hasLiveTemperatureReading = false;
   bool _hasLiveVoltageReading = false;
   String? _masterSerial;
@@ -57,6 +58,8 @@ class ConnectionController extends ChangeNotifier {
   bool get hasLiveVoltageReading => _hasLiveVoltageReading;
   String get masterSerial => _masterSerial ?? descriptor?.deviceId ?? 'Unknown';
   String get deviceRole => _deviceRole ?? 'N/A';
+  String deviceName(DeviceDescriptor device) =>
+      _deviceNames[device.stableId] ?? device.displayName;
   int get reportingSlaveCount {
     final master = _masterSerial;
     return _lastSeenByDevice.keys
@@ -85,7 +88,20 @@ class ConnectionController extends ChangeNotifier {
   Future<bool> requestBle() => _permissions.requestBle();
 
   Future<void> initialize() async {
+    _deviceNames = await _preferences.loadDeviceNames();
     lastDevice = await _preferences.loadLast();
+    final last = lastDevice;
+    if (last != null) lastDevice = _withSavedName(last);
+    notifyListeners();
+  }
+
+  /// Reload names before rendering a refreshed scan/discovery list.
+  Future<void> refreshDeviceNames() async {
+    _deviceNames = await _preferences.loadDeviceNames();
+    final current = descriptor;
+    if (current != null) descriptor = _withSavedName(current);
+    final last = lastDevice;
+    if (last != null) lastDevice = _withSavedName(last);
     notifyListeners();
   }
 
@@ -97,6 +113,7 @@ class ConnectionController extends ChangeNotifier {
       debugPrint('Ulink BLE: connect ignored because another attempt is active.');
       return false;
     }
+    target = _withSavedName(target);
     errorMessage = null;
     batteryCount = null;
     expectedBatteryCount = null;
@@ -305,12 +322,33 @@ class ConnectionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> renameConnectedDevice(String value) async {
+    final name = value.trim();
+    if (name.isEmpty || name.length > 20) {
+      throw ArgumentError('Name must contain 1 to 20 characters.');
+    }
+    _requireConnection();
+    final current = descriptor;
+    if (current == null) throw StateError('Device is disconnected.');
+    await _preferences.saveDeviceName(current.stableId, name);
+    _deviceNames[current.stableId] = name;
+    descriptor = current.copyWith(name: name);
+    lastDevice = descriptor;
+    await _preferences.save(descriptor!);
+    notifyListeners();
+  }
+
   device.DeviceConnection _requireConnection() {
     final active = _connection;
     if (active == null || connectionState != device.ConnectionState.connected) {
       throw StateError('Device is disconnected. Reconnect before calibrating.');
     }
     return active;
+  }
+
+  DeviceDescriptor _withSavedName(DeviceDescriptor device) {
+    final name = _deviceNames[device.stableId];
+    return name == null ? device : device.copyWith(name: name);
   }
 
   String? _liveIdentity(Map<String, dynamic> reading) {

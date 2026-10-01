@@ -44,6 +44,9 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
 
   Future<void> _scan() async {
     if (_scanning || _connecting) return;
+    final connectionController = context.read<ConnectionController>();
+    await connectionController.refreshDeviceNames();
+    if (!mounted) return;
     setState(() {
       _nearby.clear(); _rawAdvertisementIds.clear(); _selectedId = null; _error = null;
       _scanning = true; _status = 'Requesting Bluetooth permissions…';
@@ -54,7 +57,7 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
         if (mounted) setState(() => _status = 'Demo gateway found. Select it to connect.');
         return;
       }
-      final allowed = await context.read<ConnectionController>().requestBle();
+      final allowed = await connectionController.requestBle();
       _log('BLE scan/connect permissions granted: $allowed');
       if (!allowed) throw StateError('Bluetooth permission is required. Allow Nearby devices/Bluetooth access, then retry.');
       if (!await FlutterBluePlus.isSupported) throw StateError('Bluetooth LE is not supported on this device.');
@@ -153,7 +156,7 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
       builder: (dialogContext) => AlertDialog(
         icon: Icon(Icons.check_circle, color: Theme.of(dialogContext).colorScheme.primary, size: 40),
         title: const Text('Connection successful'),
-        content: Text('Connected to ${descriptor.deviceId}.'),
+        content: Text('Connected to ${context.read<ConnectionController>().deviceName(descriptor)}.'),
         actions: [
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext),
@@ -167,10 +170,6 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
       MaterialPageRoute<void>(builder: (_) => const CalibrationScreen()),
     );
   }
-
-  String _name(ScanResult result) => result.advertisementData.advName.isNotEmpty
-      ? result.advertisementData.advName : result.device.platformName.isNotEmpty
-      ? result.device.platformName : 'Unnamed BLE device';
 
   String _adapterMessage(BluetoothAdapterState state) => switch (state) {
     BluetoothAdapterState.on => 'Bluetooth is ready.',
@@ -189,6 +188,9 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final controller = context.watch<ConnectionController>();
+    // ignore: no_leading_underscores_for_local_identifiers
+    String _name(ScanResult result) => controller.deviceName(_descriptor(result));
     final devices = _nearby.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
     final demo = AppConfig.demoMode;
     return Scaffold(
