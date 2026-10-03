@@ -9,6 +9,7 @@ import 'config/app_config.dart';
 import 'providers/connection_controller.dart';
 import 'screens/calibration_history_screen.dart';
 import 'screens/design_mode_screen.dart';
+import 'screens/emulate_ulink_screen.dart';
 import 'screens/live_data_viewer_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/scanner_screen.dart';
@@ -195,10 +196,12 @@ class _RootNavigation extends StatefulWidget {
 }
 
 class _RootNavigationState extends State<_RootNavigation> {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   int _selectedIndex = 0;
 
   @override
   Widget build(BuildContext context) => Scaffold(
+    key: _scaffoldKey,
     body: IndexedStack(
       index: _selectedIndex,
       children: [
@@ -237,6 +240,12 @@ class _RootNavigationState extends State<_RootNavigation> {
         ),
       ],
     ),
+    floatingActionButton: FloatingActionButton.small(
+      tooltip: 'Open menu',
+      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+      child: const Icon(Icons.menu),
+    ),
+    floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
     drawer: Drawer(
       child: SafeArea(
         child: ListView(
@@ -250,6 +259,18 @@ class _RootNavigationState extends State<_RootNavigation> {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const WifiProvisioningScreen(),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.router_outlined),
+              title: const Text('Emulate Ulink'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const EmulateUlinkScreen(),
                   ),
                 );
               },
