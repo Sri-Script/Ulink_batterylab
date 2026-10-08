@@ -240,12 +240,6 @@ class _RootNavigationState extends State<_RootNavigation> {
         ),
       ],
     ),
-    floatingActionButton: FloatingActionButton.small(
-      tooltip: 'Open menu',
-      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-      child: const Icon(Icons.menu),
-    ),
-    floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
     drawer: Drawer(
       child: SafeArea(
         child: ListView(

@@ -294,11 +294,24 @@ class _ScannerScreenState extends State<ScannerScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    'Connect Ulink Gateway',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Connect Ulink Gateway',
+                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.menu),
+                        tooltip: 'Open menu',
+                        onPressed: () => context
+                            .findRootAncestorStateOfType<ScaffoldState>()
+                            ?.openDrawer(),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 14),
                   SegmentedButton<ScanMode>(
