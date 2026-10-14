@@ -104,7 +104,7 @@ class _EmulateUlinkScreenState extends State<EmulateUlinkScreen> {
     }
   }
 
-  Future<void> _sendNow() async {
+  Future<void>_sendNow() async {
     if (_isSending) return;
     final settings = _settings;
     if (settings == null) {
