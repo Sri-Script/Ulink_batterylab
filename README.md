@@ -2,6 +2,20 @@
 
 Scanner-first Flutter Android app for connecting to one uniquely identified Ulink ESP32 gateway and reading/writing calibration data over BLE or local-network REST.
 
+SI Login
+  -> Company Selection
+  -> Choose connection method
+
+     UCode
+       -> Resolve one ULink automatically
+       -> Select specific linked device
+       -> Configure, edit, calibrate, monitor, or review history
+
+     Direct BLE
+       -> Choose Battery Monitor or Door Monitor
+       -> Scan and connect directly
+       -> Use relevant device controls or monitoring
+
 ## Run
 
 Demo mode is enabled by default so the complete UI works in an emulator:
