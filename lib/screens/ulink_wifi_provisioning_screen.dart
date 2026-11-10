@@ -29,6 +29,7 @@ class _UlinkWifiProvisioningScreenState
   bool _obscurePassword = true;
   bool _loaded = false;
   bool _refreshing = false;
+  bool _confirming = false;
   UlinkSettingsKey? _saving;
   String? _loadError;
 
@@ -169,14 +170,58 @@ class _UlinkWifiProvisioningScreenState
       ) ??
       false;
 
-  Future<void> _save(UlinkSettingsKey key) async {
-    if (!_loaded || _saving != null || _refreshing) return;
+  Future<void> _requestSave(UlinkSettingsKey key) async {
+    if (!_loaded || _saving != null || _refreshing || _confirming) return;
     final value = _valueFor(key);
     final validation = UlinkSettingsProtocol.validate(key, value);
     if (validation != null) {
       setState(() => _status[key] = validation);
       return;
     }
+    setState(() => _confirming = true);
+    final confirmed = await _confirmSave(key, value);
+    if (!mounted) return;
+    setState(() => _confirming = false);
+    if (confirmed) await _save(key);
+  }
+
+  Future<bool> _confirmSave(UlinkSettingsKey key, String value) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('CONFIRM?'),
+          content: Text(_confirmationMessage(key, value)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Set'),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+
+  String _confirmationMessage(UlinkSettingsKey key, String value) {
+    final fieldName = switch (key) {
+      UlinkSettingsKey.ssid => 'Wi-Fi SSID',
+      UlinkSettingsKey.password => 'Wi-Fi password',
+      UlinkSettingsKey.apn => 'APN',
+      UlinkSettingsKey.mode => 'mode',
+    };
+    final message = 'Send this updated $fieldName to the connected U-Link?';
+    if (key == UlinkSettingsKey.password) {
+      return '$message\n\nThe Wi-Fi password will be updated.';
+    }
+    return '$message\n\nNew value: $value';
+  }
+
+  Future<void> _save(UlinkSettingsKey key) async {
+    if (!_loaded || _saving != null || _refreshing) return;
+    final value = _valueFor(key);
     setState(() {
       _saving = key;
       _status[key] = 'Saving...';
@@ -348,9 +393,9 @@ class _UlinkWifiProvisioningScreenState
             ),
           ),
           FilledButton(
-            onPressed: !_loaded || _saving != null || _refreshing
+            onPressed: !_loaded || _saving != null || _refreshing || _confirming
                 ? null
-                : () => _save(key),
+                : () => _requestSave(key),
             child: Text(_saving == key ? 'Saving...' : 'Set'),
           ),
         ],

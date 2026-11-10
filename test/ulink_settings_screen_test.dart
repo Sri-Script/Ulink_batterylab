@@ -37,7 +37,7 @@ void main() {
     expect(find.text('WIFI'), findsWidgets);
   });
 
-  testWidgets('Refresh sends GET_SETTINGS and a Set sends its exact command', (
+  testWidgets('Cancel closes Set confirmation without sending a command', (
     tester,
   ) async {
     final client = _FakeSettingsClient();
@@ -47,21 +47,55 @@ void main() {
     client.emit(UlinkSettingsEvent(initialSettings));
     await tester.pump();
 
-    await tester.tap(find.text('Refresh / Get All'));
-    await tester.pump();
-    expect(client.commands, contains('GET_SETTINGS\n'));
-
-    final ssidField = tester.widget<TextField>(find.byType(TextField).first);
     await tester.enterText(find.byType(TextField).first, 'NewNetwork');
-    await tester.pump();
-    expect(ssidField.controller!.text, 'NewNetwork');
     await tester.tap(find.widgetWithText(FilledButton, 'Set').first);
-    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('CONFIRM?'), findsOneWidget);
     expect(
-      client.commands,
-      contains('{"cmd":"SET","key":"ssid","value":"NewNetwork"}\n'),
+      find.text(
+        'Send this updated Wi-Fi SSID to the connected U-Link?\n\nNew value: NewNetwork',
+      ),
+      findsOneWidget,
     );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(client.commands, isEmpty);
   });
+
+  testWidgets(
+    'Refresh sends GET_SETTINGS and confirmed Set sends exact command',
+    (tester) async {
+      final client = _FakeSettingsClient();
+      await tester.pumpWidget(
+        MaterialApp(home: UlinkWifiProvisioningScreen(client: client)),
+      );
+      client.emit(UlinkSettingsEvent(initialSettings));
+      await tester.pump();
+
+      await tester.tap(find.text('Refresh / Get All'));
+      await tester.pump();
+      expect(client.commands, contains('GET_SETTINGS\n'));
+
+      final ssidField = tester.widget<TextField>(find.byType(TextField).first);
+      await tester.enterText(find.byType(TextField).first, 'NewNetwork');
+      await tester.pump();
+      expect(ssidField.controller!.text, 'NewNetwork');
+      await tester.tap(find.widgetWithText(FilledButton, 'Set').first);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Set'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        client.commands,
+        contains('{"cmd":"SET","key":"ssid","value":"NewNetwork"}\n'),
+      );
+    },
+  );
 }
 
 class _FakeSettingsClient implements UlinkSettingsClient {
