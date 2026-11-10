@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/app_config.dart';
 import 'providers/connection_controller.dart';
+import 'screens/architecture_choice_screen.dart';
 import 'screens/calibration_history_screen.dart';
 import 'screens/design_mode_screen.dart';
 import 'screens/emulate_ulink_screen.dart';
@@ -78,7 +79,7 @@ class _BatteryLabAppState extends State<BatteryLabApp> {
         ),
         dividerColor: const Color(0xFF4A4E51),
       ),
-      home: _LaunchGate(onServicesReady: _telemetryNotifications.start),
+      home: const ArchitectureChoiceScreen(),
     ),
   );
 }

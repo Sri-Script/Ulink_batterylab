@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../config/device_contract.dart';
 import '../providers/connection_controller.dart';
 import '../services/device_connection.dart' as device;
+import '../services/device_id_generator.dart';
 import '../widgets/connection_status_pill.dart';
 import 'calibration_history_screen.dart';
 
@@ -22,6 +23,83 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   final Set<String> _busy = {};
   dynamic _lastDetectedTemp;
   dynamic _lastDetectedVoltage;
+  String? _generatedDid;
+  bool _sendingDid = false;
+
+  void _generateDid() {
+    if (_sendingDid) return;
+    setState(() => _generatedDid = generateDeviceId(DateTime.now().toUtc()));
+  }
+
+  Future<void> _confirmAndSendDid(
+    ConnectionController controller,
+    String connectedDeviceId,
+  ) async {
+    final did = _generatedDid;
+    if (did == null ||
+        _sendingDid ||
+        controller.connectionState != device.ConnectionState.connected) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Send DID to U-Link?'),
+        content: Text(
+          'DID: $did\n\nThis will be sent to the connected U-Link: '
+          '$connectedDeviceId.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Send DID'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final currentDeviceId = controller.descriptor?.deviceId;
+    if (controller.connectionState != device.ConnectionState.connected ||
+        currentDeviceId != connectedDeviceId) {
+      _message(
+        'The connected device changed. Reconnect and try again.',
+        error: true,
+      );
+      return;
+    }
+
+    setState(() => _sendingDid = true);
+    try {
+      // The generic device_id contract preserves the existing BLE/Wi-Fi transport behavior.
+      // Firmware must recognize device_id and persist/acknowledge it for end-to-end confirmation.
+      // A successful BLE write is transport acceptance, not proof of persistence without a firmware ACK.
+      final sent = await controller.write('device_id', did);
+      if (!mounted) return;
+      if (sent) {
+        _message('DID write sent to $connectedDeviceId.');
+      } else {
+        _message(
+          'Could not send the DID to $connectedDeviceId. Please try again.',
+          error: true,
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        _message(
+          'Could not send the DID to $connectedDeviceId. Please try again.',
+          error: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sendingDid = false);
+    }
+  }
 
   Future<void> _run(String key, String command) async {
     setState(() => _busy.add(key));
@@ -33,15 +111,21 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       if (!mounted) return;
       final decoded = _json(response);
       final failed = _responseIndicatesFailure(response, decoded);
-      if (!failed && decoded != null && (command.startsWith('CAL_TEMP') || command.startsWith('CAL_VOLT'))) {
+      if (!failed &&
+          decoded != null &&
+          (command.startsWith('CAL_TEMP') || command.startsWith('CAL_VOLT'))) {
         setState(() {
           if (command.startsWith('CAL_TEMP')) {
             _lastDetectedTemp = _firstValue(decoded, const [
-              'detected_temp', 'detected_temperature', 'detectedTemp',
+              'detected_temp',
+              'detected_temperature',
+              'detectedTemp',
             ]);
           } else {
             _lastDetectedVoltage = _firstValue(decoded, const [
-              'detected_volt', 'detected_voltage', 'detectedVoltage',
+              'detected_volt',
+              'detected_voltage',
+              'detectedVoltage',
             ]);
           }
         });
@@ -75,7 +159,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   Future<void> _reference(bool temperature) async {
     final value = await _askCalibrationReference(temperature);
     if (value != null) {
-      await _run(temperature ? 'temp' : 'volt', '${temperature ? 'CAL_TEMP' : 'CAL_VOLT'}:$value');
+      await _run(
+        temperature ? 'temp' : 'volt',
+        '${temperature ? 'CAL_TEMP' : 'CAL_VOLT'}:$value',
+      );
     }
   }
 
@@ -91,7 +178,9 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
               ? connection.hasLiveTemperatureReading
               : connection.hasLiveVoltageReading;
           return AlertDialog(
-            title: Text('True ${temperature ? 'temperature' : 'voltage'} reference'),
+            title: Text(
+              'True ${temperature ? 'temperature' : 'voltage'} reference',
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -99,8 +188,13 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                 TextField(
                   controller: textController,
                   autofocus: true,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                  decoration: const InputDecoration(border: OutlineInputBorder()),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  ),
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 if (ready)
@@ -108,15 +202,26 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                 else
                   const Row(
                     children: [
-                      SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                       SizedBox(width: 10),
-                      Expanded(child: Text('Waiting for a live reading from the device...')),
+                      Expanded(
+                        child: Text(
+                          'Waiting for a live reading from the device...',
+                        ),
+                      ),
                     ],
                   ),
               ],
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
                 onPressed: !ready
                     ? null
@@ -136,7 +241,11 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     return value;
   }
 
-  Future<String?> _ask(String title, {String? hint, bool allowEmpty = false}) async {
+  Future<String?> _ask(
+    String title, {
+    String? hint,
+    bool allowEmpty = false,
+  }) async {
     final controller = TextEditingController();
     final result = await showDialog<String>(
       context: context,
@@ -145,11 +254,20 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-          decoration: InputDecoration(hintText: hint, border: const OutlineInputBorder()),
+          keyboardType: const TextInputType.numberWithOptions(
+            decimal: true,
+            signed: true,
+          ),
+          decoration: InputDecoration(
+            hintText: hint,
+            border: const OutlineInputBorder(),
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () {
               final value = controller.text.trim();
@@ -166,7 +284,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _serial() async {
-    final current = await context.read<ConnectionController>().command('GET_SN', logKey: 'serial');
+    final current = await context.read<ConnectionController>().command(
+      'GET_SN',
+      logKey: 'serial',
+    );
     if (!mounted) return;
     final currentSuffix = current.startsWith('SN:BATTERY-')
         ? current.substring('SN:BATTERY-'.length)
@@ -177,7 +298,9 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _renameDevice(ConnectionController connection) async {
-    final field = TextEditingController(text: connection.deviceName(connection.descriptor!));
+    final field = TextEditingController(
+      text: connection.deviceName(connection.descriptor!),
+    );
     String? error;
     final name = await showDialog<String>(
       context: context,
@@ -185,7 +308,8 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         animation: connection,
         builder: (_, __) => StatefulBuilder(
           builder: (_, setDialogState) {
-            final connected = connection.connectionState == device.ConnectionState.connected;
+            final connected =
+                connection.connectionState == device.ConnectionState.connected;
             final trimmed = field.text.trim();
             final valid = trimmed.isNotEmpty && trimmed.length <= 20;
             return AlertDialog(
@@ -213,12 +337,17 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                   if (!connected)
                     const Padding(
                       padding: EdgeInsets.only(top: 8),
-                      child: Text('Device disconnected. Reconnect before renaming.'),
+                      child: Text(
+                        'Device disconnected. Reconnect before renaming.',
+                      ),
                     ),
                 ],
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
                 FilledButton(
                   onPressed: connected && valid
                       ? () => Navigator.pop(dialogContext, trimmed)
@@ -264,12 +393,16 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
               decoration: InputDecoration(
                 prefixText: 'BATTERY-',
                 border: const OutlineInputBorder(),
-                helperText: 'Enter 1 to 3 digits. Example: 7 becomes BATTERY-007.',
+                helperText:
+                    'Enter 1 to 3 digits. Example: 7 becomes BATTERY-007.',
                 errorText: error,
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
                 onPressed: !valid
                     ? null
@@ -277,7 +410,9 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                         final normalized = suffix.padLeft(3, '0');
                         final serial = 'BATTERY-$normalized';
                         if (!DeviceContract.serialPattern.hasMatch(serial)) {
-                          setDialogState(() => error = 'Enter between 1 and 3 digits.');
+                          setDialogState(
+                            () => error = 'Enter between 1 and 3 digits.',
+                          );
                           return;
                         }
                         Navigator.pop(dialogContext, serial);
@@ -294,7 +429,11 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _clock() async {
-    final value = await _ask('Clock', hint: 'Blank reads; ISO-8601 sets with UTC offset.', allowEmpty: true);
+    final value = await _ask(
+      'Clock',
+      hint: 'Blank reads; ISO-8601 sets with UTC offset.',
+      allowEmpty: true,
+    );
     if (value == null) return;
     if (value.isEmpty) {
       await _run('clock', 'GET_TIME');
@@ -302,33 +441,57 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     }
     final timestamp = DateTime.tryParse(value);
     if (timestamp == null) {
-      _message('Enter a complete ISO-8601 timestamp, for example 2026-09-03T12:30:00+05:30.', error: true);
+      _message(
+        'Enter a complete ISO-8601 timestamp, for example 2026-09-03T12:30:00+05:30.',
+        error: true,
+      );
       return;
     }
-    await _run('clock', 'SET_TIME:${DeviceContract.deviceTimestamp(timestamp)}');
+    await _run(
+      'clock',
+      'SET_TIME:${DeviceContract.deviceTimestamp(timestamp)}',
+    );
   }
 
   Future<void> _role() async {
-    final current = await context.read<ConnectionController>().command('GET_ROLE', logKey: 'role');
+    final current = await context.read<ConnectionController>().command(
+      'GET_ROLE',
+      logKey: 'role',
+    );
     if (!mounted) return;
     final choice = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Node role'), content: Text(current),
+        title: const Text('Node role'),
+        content: Text(current),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(dialogContext, 'MAKE_AVAILABLE'), child: const Text('Make available')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, 'MAKE_MASTER'), child: const Text('Make master')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'MAKE_AVAILABLE'),
+            child: const Text('Make available'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, 'MAKE_MASTER'),
+            child: const Text('Make master'),
+          ),
         ],
       ),
     );
     if (choice != null) await _run('role', choice);
   }
 
-  void _message(String message, {bool error = false}) => ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message.trim()), backgroundColor: error ? Theme.of(context).colorScheme.error : null),
-  );
-  String _clean(Object error) => error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
+  void _message(String message, {bool error = false}) =>
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message.trim()),
+          backgroundColor: error ? Theme.of(context).colorScheme.error : null,
+        ),
+      );
+  String _clean(Object error) =>
+      error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
 
   bool _isWriteCommand(String command) =>
       command.startsWith('CAL_TEMP:') ||
@@ -339,7 +502,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       command == 'MAKE_AVAILABLE' ||
       command.startsWith('RESET_');
 
-  bool _responseIndicatesFailure(String response, Map<String, dynamic>? decoded) {
+  bool _responseIndicatesFailure(
+    String response,
+    Map<String, dynamic>? decoded,
+  ) {
     if (response.trimLeft().toUpperCase().startsWith('ERROR:')) return true;
     if (decoded == null) return false;
     final status = decoded['status']?.toString().toUpperCase();
@@ -375,7 +541,11 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
             : Theme.of(dialogContext).colorScheme.primary,
         size: 40,
       ),
-      title: Text(failed ? (_deviceError(decoded) ?? 'Command failed') : 'Sent successfully'),
+      title: Text(
+        failed
+            ? (_deviceError(decoded) ?? 'Command failed')
+            : 'Sent successfully',
+      ),
       content: SingleChildScrollView(
         child: SelectableText(
           'Sent:\n$command\n\nDevice response:\n${_responseDetails(response, decoded)}',
@@ -390,31 +560,48 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     ),
   );
 
-  Future<void> _showCommandFailure(String command, String error) => showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (dialogContext) => AlertDialog(
-      icon: Icon(Icons.error, color: Theme.of(dialogContext).colorScheme.error, size: 40),
-      title: const Text('Command failed'),
-      content: SelectableText('Sent:\n$command\n\nFailure:\n$error'),
-      actions: [
-        FilledButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Continue')),
-      ],
-    ),
-  );
+  Future<void> _showCommandFailure(String command, String error) =>
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          icon: Icon(
+            Icons.error,
+            color: Theme.of(dialogContext).colorScheme.error,
+            size: 40,
+          ),
+          title: const Text('Command failed'),
+          content: SelectableText('Sent:\n$command\n\nFailure:\n$error'),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
 
   String _responseDetails(String response, Map<String, dynamic>? decoded) {
     if (decoded == null) return response.trim();
     return const JsonEncoder.withIndent('  ').convert(decoded);
   }
-  String? _deviceError(Map<String, dynamic>? decoded) => decoded?['error']?.toString();
+
+  String? _deviceError(Map<String, dynamic>? decoded) =>
+      decoded?['error']?.toString();
 
   Map<String, dynamic>? _json(String value) {
-    try { final decoded = jsonDecode(value); return decoded is Map ? Map<String, dynamic>.from(decoded) : null; }
-    on FormatException { return null; }
+    try {
+      final decoded = jsonDecode(value);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } on FormatException {
+      return null;
+    }
   }
+
   dynamic _firstValue(Map<String, dynamic> values, List<String> keys) {
-    for (final key in keys) { if (values[key] != null) return values[key]; }
+    for (final key in keys) {
+      if (values[key] != null) return values[key];
+    }
     return null;
   }
 
@@ -422,15 +609,19 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   Widget build(BuildContext context) {
     final controller = context.watch<ConnectionController>();
     final descriptor = controller.descriptor;
-    if (descriptor == null) return const Scaffold(body: Center(child: Text('No device connected.')));
-    final connected = controller.connectionState == device.ConnectionState.connected;
+    if (descriptor == null)
+      return const Scaffold(body: Center(child: Text('No device connected.')));
+    final connected =
+        controller.connectionState == device.ConnectionState.connected;
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: Text(controller.deviceName(descriptor)),
           actions: [
-            Center(child: ConnectionStatusPill(state: controller.connectionState)),
+            Center(
+              child: ConnectionStatusPill(state: controller.connectionState),
+            ),
             IconButton(
               onPressed: connected ? () => _renameDevice(controller) : null,
               icon: const Icon(Icons.edit),
@@ -438,16 +629,31 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
             ),
             IconButton(
               onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const CalibrationHistoryScreen()),
+                MaterialPageRoute<void>(
+                  builder: (_) => const CalibrationHistoryScreen(),
+                ),
               ),
               icon: const Icon(Icons.history),
               tooltip: 'Calibration history',
             ),
-            IconButton(onPressed: () async { await controller.disconnect(); if (context.mounted) Navigator.pop(context); }, icon: const Icon(Icons.link_off)),
+            IconButton(
+              onPressed: () async {
+                await controller.disconnect();
+                if (context.mounted) Navigator.pop(context);
+              },
+              icon: const Icon(Icons.link_off),
+            ),
           ],
-          bottom: const TabBar(tabs: [Tab(icon: Icon(Icons.monitor_heart), text: 'Live'), Tab(icon: Icon(Icons.tune), text: 'Calibration')]),
+          bottom: const TabBar(
+            tabs: [
+              Tab(icon: Icon(Icons.monitor_heart), text: 'Live'),
+              Tab(icon: Icon(Icons.tune), text: 'Calibration'),
+            ],
+          ),
         ),
-        body: TabBarView(children: [_live(controller), _actions(connected, controller)]),
+        body: TabBarView(
+          children: [_live(controller), _actions(connected, controller)],
+        ),
       ),
     );
   }
@@ -472,17 +678,36 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       children: [
         Text('Connected device', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
-        Text('Master: ${controller.masterSerial} - ${controller.reportingSlaveCount} slave(s) reporting'),
+        Text(
+          'Master: ${controller.masterSerial} - ${controller.reportingSlaveCount} slave(s) reporting',
+        ),
         const SizedBox(height: 8),
-        _CalibrationBlock(status: status, liveReading: directReading, detectedTemp: _lastDetectedTemp, detectedVoltage: _lastDetectedVoltage),
+        _CalibrationBlock(
+          status: status,
+          liveReading: directReading,
+          detectedTemp: _lastDetectedTemp,
+          detectedVoltage: _lastDetectedVoltage,
+        ),
         const SizedBox(height: 20),
         Text('Live devices', style: Theme.of(context).textTheme.titleLarge),
-        const Text('Each dot flashes once when that device sends a new reading.'),
+        const Text(
+          'Each dot flashes once when that device sends a new reading.',
+        ),
         const SizedBox(height: 12),
-        if (controller.liveDevices.isEmpty) const Card(child: Padding(padding: EdgeInsets.all(16), child: Text('Waiting for live data…'))),
+        if (controller.liveDevices.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Waiting for live data…'),
+            ),
+          ),
         ...controller.liveDevices.map((reading) {
           final serial = reading['serial']?.toString() ?? 'Unknown serial';
-          return _LiveDeviceCard(key: ValueKey(serial), reading: reading, sequence: controller.liveUpdateSequence(serial));
+          return _LiveDeviceCard(
+            key: ValueKey(serial),
+            reading: reading,
+            sequence: controller.liveUpdateSequence(serial),
+          );
         }),
       ],
     );
@@ -490,34 +715,122 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
   Widget _actions(bool connected, ConnectionController controller) {
     final actions = <_Action>[
-      _Action('Calibrate Temperature', Icons.thermostat, () => _reference(true)),
+      _Action(
+        'Calibrate Temperature',
+        Icons.thermostat,
+        () => _reference(true),
+      ),
       _Action('Calibrate Voltage', Icons.bolt, () => _reference(false)),
-      _Action('View Calibration Status', Icons.fact_check, () => _run('status', 'GET_CAL')),
-      _Action('Reset Temperature Calibration', Icons.restart_alt, () => _run('resetTemp', 'RESET_TEMP_CAL')),
-      _Action('Reset Voltage Calibration', Icons.restart_alt, () => _run('resetVolt', 'RESET_VOLT_CAL')),
-      _Action('Reset All Calibration', Icons.delete_sweep, () => _run('resetAll', 'RESET_CAL')),
-      _Action('Serial Number', Icons.tag, _serial), _Action('Role', Icons.account_tree, _role), _Action('Clock', Icons.schedule, _clock),
+      _Action(
+        'View Calibration Status',
+        Icons.fact_check,
+        () => _run('status', 'GET_CAL'),
+      ),
+      _Action(
+        'Reset Temperature Calibration',
+        Icons.restart_alt,
+        () => _run('resetTemp', 'RESET_TEMP_CAL'),
+      ),
+      _Action(
+        'Reset Voltage Calibration',
+        Icons.restart_alt,
+        () => _run('resetVolt', 'RESET_VOLT_CAL'),
+      ),
+      _Action(
+        'Reset All Calibration',
+        Icons.delete_sweep,
+        () => _run('resetAll', 'RESET_CAL'),
+      ),
+      _Action('Serial Number', Icons.tag, _serial),
+      _Action('Role', Icons.account_tree, _role),
+      _Action('Clock', Icons.schedule, _clock),
     ];
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text('Detected values are saved only from the immediately preceding calibration response; firmware does not provide them continuously.'),
+        const Text(
+          'Detected values are saved only from the immediately preceding calibration response; firmware does not provide them continuously.',
+        ),
         const SizedBox(height: 8),
-        ...actions.map((action) => Card(child: ListTile(leading: Icon(action.icon), title: Text(action.title), trailing: _busy.contains(action.title) ? const CircularProgressIndicator() : const Icon(Icons.chevron_right), onTap: connected ? action.run : null))),
+        _didCard(connected, controller),
+        const SizedBox(height: 8),
+        ...actions.map(
+          (action) => Card(
+            child: ListTile(
+              leading: Icon(action.icon),
+              title: Text(action.title),
+              trailing: _busy.contains(action.title)
+                  ? const CircularProgressIndicator()
+                  : const Icon(Icons.chevron_right),
+              onTap: connected ? action.run : null,
+            ),
+          ),
+        ),
       ],
+    );
+  }
+
+  Widget _didCard(bool connected, ConnectionController controller) {
+    final deviceId = controller.descriptor?.deviceId ?? 'Unknown device';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Device ID (DID)',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(_generatedDid ?? 'No DID generated.'),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton(
+                  onPressed: connected && !_sendingDid ? _generateDid : null,
+                  child: const Text('Generate DID'),
+                ),
+                FilledButton(
+                  onPressed: connected && _generatedDid != null && !_sendingDid
+                      ? () => _confirmAndSendDid(controller, deviceId)
+                      : null,
+                  child: _sendingDid
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Send DID to U-Link'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 class _CalibrationBlock extends StatelessWidget {
-  const _CalibrationBlock({required this.status, required this.liveReading, required this.detectedTemp, required this.detectedVoltage});
+  const _CalibrationBlock({
+    required this.status,
+    required this.liveReading,
+    required this.detectedTemp,
+    required this.detectedVoltage,
+  });
   final Map<String, dynamic>? status;
   final Map<String, dynamic>? liveReading;
   final dynamic detectedTemp;
   final dynamic detectedVoltage;
 
   dynamic _value(List<String> keys, {dynamic fallback}) {
-    for (final key in keys) { if (liveReading?[key] != null) return liveReading![key]; if (status?[key] != null) return status![key]; }
+    for (final key in keys) {
+      if (liveReading?[key] != null) return liveReading![key];
+      if (status?[key] != null) return status![key];
+    }
     return fallback;
   }
 
@@ -525,55 +838,161 @@ class _CalibrationBlock extends StatelessWidget {
   Widget build(BuildContext context) => Card(
     child: Padding(
       padding: const EdgeInsets.all(16),
-      child: status == null ? const Text('Calibration status unavailable.') : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Calibration status', style: Theme.of(context).textTheme.titleMedium), const SizedBox(height: 10),
-        _Field('Serial Number', _value(const ['serial', 'serial_number', 'serialNumber'])),
-        _Field('Last Cal Temp Ref', _value(const ['temp_true_ref', 'last_cal_temp_ref'])),
-        _Field('Temp Factor', _value(const ['temp_factor'])),
-        _Field('Calibrated Temp', _value(const ['temperature', 'temp', 'temp_calibrated', 'calibrated_temp'])),
-        _Field('Detected Temp (last calibration run)', detectedTemp, placeholder: 'not measured yet this session'),
-        _Field('Last Cal Volt Ref', _value(const ['volt_true_ref', 'last_cal_volt_ref'])),
-        _Field('Voltage Factor', _value(const ['volt_factor', 'voltage_factor'])),
-        _Field('Calibrated Voltage', _value(const ['voltage', 'volt', 'volt_calibrated', 'calibrated_voltage'])),
-        _Field('Detected Voltage (last calibration run)', detectedVoltage, placeholder: 'not measured yet this session'),
-      ]),
+      child: status == null
+          ? const Text('Calibration status unavailable.')
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Calibration status',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 10),
+                _Field(
+                  'Serial Number',
+                  _value(const ['serial', 'serial_number', 'serialNumber']),
+                ),
+                _Field(
+                  'Last Cal Temp Ref',
+                  _value(const ['temp_true_ref', 'last_cal_temp_ref']),
+                ),
+                _Field('Temp Factor', _value(const ['temp_factor'])),
+                _Field(
+                  'Calibrated Temp',
+                  _value(const [
+                    'temperature',
+                    'temp',
+                    'temp_calibrated',
+                    'calibrated_temp',
+                  ]),
+                ),
+                _Field(
+                  'Detected Temp (last calibration run)',
+                  detectedTemp,
+                  placeholder: 'not measured yet this session',
+                ),
+                _Field(
+                  'Last Cal Volt Ref',
+                  _value(const ['volt_true_ref', 'last_cal_volt_ref']),
+                ),
+                _Field(
+                  'Voltage Factor',
+                  _value(const ['volt_factor', 'voltage_factor']),
+                ),
+                _Field(
+                  'Calibrated Voltage',
+                  _value(const [
+                    'voltage',
+                    'volt',
+                    'volt_calibrated',
+                    'calibrated_voltage',
+                  ]),
+                ),
+                _Field(
+                  'Detected Voltage (last calibration run)',
+                  detectedVoltage,
+                  placeholder: 'not measured yet this session',
+                ),
+              ],
+            ),
     ),
   );
 }
 
 class _Field extends StatelessWidget {
   const _Field(this.label, this.value, {this.placeholder = '—'});
-  final String label; final dynamic value; final String placeholder;
-  @override Widget build(BuildContext context) => Padding(
+  final String label;
+  final dynamic value;
+  final String placeholder;
+  @override
+  Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 3),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(width: 190, child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.w600))),
-      Expanded(child: Text(value?.toString() ?? placeholder)),
-    ]),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 190,
+          child: Text(
+            '$label:',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        Expanded(child: Text(value?.toString() ?? placeholder)),
+      ],
+    ),
   );
 }
 
 class _LiveDeviceCard extends StatefulWidget {
-  const _LiveDeviceCard({super.key, required this.reading, required this.sequence});
-  final Map<String, dynamic> reading; final int sequence;
-  @override State<_LiveDeviceCard> createState() => _LiveDeviceCardState();
+  const _LiveDeviceCard({
+    super.key,
+    required this.reading,
+    required this.sequence,
+  });
+  final Map<String, dynamic> reading;
+  final int sequence;
+  @override
+  State<_LiveDeviceCard> createState() => _LiveDeviceCardState();
 }
 
 class _LiveDeviceCardState extends State<_LiveDeviceCard> {
-  Timer? _timer; bool _flashing = false;
-  @override void initState() { super.initState(); if (widget.sequence > 0) _pulse(); }
-  @override void didUpdateWidget(covariant _LiveDeviceCard oldWidget) { super.didUpdateWidget(oldWidget); if (widget.sequence != oldWidget.sequence) _pulse(); }
-  void _pulse() { _timer?.cancel(); if (mounted) setState(() => _flashing = true); _timer = Timer(const Duration(milliseconds: 400), () { if (mounted) setState(() => _flashing = false); }); }
-  @override void dispose() { _timer?.cancel(); super.dispose(); }
-  @override Widget build(BuildContext context) {
+  Timer? _timer;
+  bool _flashing = false;
+  @override
+  void initState() {
+    super.initState();
+    if (widget.sequence > 0) _pulse();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LiveDeviceCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.sequence != oldWidget.sequence) _pulse();
+  }
+
+  void _pulse() {
+    _timer?.cancel();
+    if (mounted) setState(() => _flashing = true);
+    _timer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) setState(() => _flashing = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final reading = widget.reading;
-    return Card(child: ListTile(
-      leading: AnimatedContainer(duration: const Duration(milliseconds: 100), width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: _flashing ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.primary.withValues(alpha: .25))),
-      title: Text(reading['serial']?.toString() ?? 'Unknown serial'),
-      subtitle: Text('Calibrated Temp: ${reading['temperature'] ?? reading['temp'] ?? '—'}\nCalibrated Voltage: ${reading['voltage'] ?? reading['volt'] ?? '—'}\nDatetime: ${reading['datetime'] ?? 'UNSYNCED'}'),
-      isThreeLine: true,
-    ));
+    return Card(
+      child: ListTile(
+        leading: AnimatedContainer(
+          duration: const Duration(milliseconds: 100),
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _flashing
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.primary.withValues(alpha: .25),
+          ),
+        ),
+        title: Text(reading['serial']?.toString() ?? 'Unknown serial'),
+        subtitle: Text(
+          'Calibrated Temp: ${reading['temperature'] ?? reading['temp'] ?? '—'}\nCalibrated Voltage: ${reading['voltage'] ?? reading['volt'] ?? '—'}\nDatetime: ${reading['datetime'] ?? 'UNSYNCED'}',
+        ),
+        isThreeLine: true,
+      ),
+    );
   }
 }
 
-class _Action { const _Action(this.title, this.icon, this.run); final String title; final IconData icon; final VoidCallback run; }
+class _Action {
+  const _Action(this.title, this.icon, this.run);
+  final String title;
+  final IconData icon;
+  final VoidCallback run;
+}
