@@ -5,39 +5,131 @@ import 'package:ulink_batterylab/services/ulink_ble_protocol_config.dart';
 import 'package:ulink_batterylab/services/ulink_ble_provisioning_client.dart';
 
 void main() {
-  test('validates Wi-Fi credentials by UTF-8 byte length', () {
-    expect(UlinkProvisioningProtocol.validateCredentials('', ''), isNotNull);
-    expect(UlinkProvisioningProtocol.validateCredentials('ssid', 'short'), isNotNull);
-    expect(UlinkProvisioningProtocol.validateCredentials('ssid', ''), isNull);
-    expect(UlinkProvisioningProtocol.validateCredentials('ssid', 'password8'), isNull);
+  const settingsFrame =
+      '{"ok":true,"event":"settings","ssid":"PlantWiFi","password":"secret","apn":"internet","mode":"WIFI"}\n';
+
+  test('validates Rev4 setting values and rejects control characters', () {
+    expect(
+      UlinkSettingsProtocol.validate(UlinkSettingsKey.ssid, ''),
+      isNotNull,
+    );
+    expect(
+      UlinkSettingsProtocol.validate(
+        UlinkSettingsKey.ssid,
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+      isNotNull,
+    );
+    expect(
+      UlinkSettingsProtocol.validate(
+        UlinkSettingsKey.password,
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+      isNull,
+    );
+    expect(
+      UlinkSettingsProtocol.validate(UlinkSettingsKey.apn, 'line\nbreak'),
+      isNotNull,
+    );
+    expect(
+      UlinkSettingsProtocol.validate(UlinkSettingsKey.mode, 'LTE'),
+      isNotNull,
+    );
+    expect(
+      UlinkSettingsProtocol.validate(UlinkSettingsKey.mode, 'GSM'),
+      isNull,
+    );
   });
 
-  test('parses fragmented and multiple acknowledgements', () {
-    final parser = UlinkAckParser();
-    final bytes = utf8.encode('{"op":"ack","requestId":"a","status":"ok"}\n{"op":"ack","requestId":"b","status":"error"}\n');
-    expect(parser.add(bytes.sublist(0, 8)), isEmpty);
-    final events = parser.add(bytes.sublist(8));
+  test('encodes the exact GET_SETTINGS and SET commands with newlines', () {
+    expect(UlinkSettingsProtocol.getSettingsCommand, 'GET_SETTINGS\n');
+    expect(
+      UlinkSettingsProtocol.encodeSet(UlinkSettingsKey.ssid, 'PlantWiFi'),
+      '{"cmd":"SET","key":"ssid","value":"PlantWiFi"}\n',
+    );
+    expect(
+      UlinkSettingsProtocol.encodeSet(UlinkSettingsKey.password, 'pw'),
+      '{"cmd":"SET","key":"password","value":"pw"}\n',
+    );
+    expect(
+      UlinkSettingsProtocol.encodeSet(UlinkSettingsKey.apn, 'internet'),
+      '{"cmd":"SET","key":"apn","value":"internet"}\n',
+    );
+    expect(
+      UlinkSettingsProtocol.encodeSet(UlinkSettingsKey.mode, 'GSM'),
+      '{"cmd":"SET","key":"mode","value":"GSM"}\n',
+    );
+  });
+
+  test('parses fragmented and multiple settings notification frames', () {
+    final parser = UlinkSettingsParser();
+    final bytes = utf8.encode('$settingsFrame$settingsFrame');
+    expect(parser.add(bytes.sublist(0, 17)), isEmpty);
+    final events = parser.add(bytes.sublist(17));
     expect(events, hasLength(2));
-    expect((events[0] as UlinkAckEvent).requestId, 'a');
-    expect((events[1] as UlinkAckEvent).status, 'error');
+    final first = events.first as UlinkSettingsEvent;
+    expect(first.settings.ssid, 'PlantWiFi');
+    expect(first.settings.apn, 'internet');
+    expect(first.settings.mode, 'WIFI');
   });
 
-  test('malformed input and mismatched acknowledgements fail the gate', () async {
-    final gate = UlinkAcknowledgementGate('expected', safeMessage: (_) => 'rejected');
-    gate.accept(const UlinkMalformedEvent());
-    expect(gate.wait(const Duration(milliseconds: 1)), throwsA(isA<UlinkProvisioningException>()));
-    final mismatch = UlinkAcknowledgementGate('expected', safeMessage: (_) => 'rejected');
-    mismatch.accept(const UlinkAckEvent(requestId: 'other', status: 'ok'));
-    expect(mismatch.wait(const Duration(milliseconds: 1)), throwsA(isA<UlinkProvisioningException>()));
+  test('matching saved reply succeeds', () async {
+    final gate = UlinkSetResponseGate(UlinkSettingsKey.ssid);
+    gate.accept(const UlinkSetReplyEvent(ok: true, key: 'ssid', saved: true));
+    await expectLater(gate.wait(const Duration(milliseconds: 1)), completes);
   });
 
-  test('a GATT write alone cannot acknowledge a request', () async {
-    final gate = UlinkAcknowledgementGate('request', safeMessage: (_) => 'rejected');
-    expect(gate.wait(const Duration(milliseconds: 1)), throwsA(isA<UlinkProvisioningException>()));
+  test('error, timeout, malformed JSON, and wrong key replies fail', () async {
+    final error = UlinkSetResponseGate(UlinkSettingsKey.ssid);
+    error.accept(const UlinkSetReplyEvent(ok: false));
+    await expectLater(
+      error.wait(const Duration(milliseconds: 1)),
+      throwsA(isA<UlinkSettingsException>()),
+    );
+
+    final malformed = UlinkSetResponseGate(UlinkSettingsKey.ssid);
+    malformed.accept(const UlinkMalformedEvent());
+    await expectLater(
+      malformed.wait(const Duration(milliseconds: 1)),
+      throwsA(isA<UlinkSettingsException>()),
+    );
+
+    final wrongKey = UlinkSetResponseGate(UlinkSettingsKey.ssid);
+    wrongKey.accept(
+      const UlinkSetReplyEvent(ok: true, key: 'apn', saved: true),
+    );
+    await expectLater(
+      wrongKey.wait(const Duration(milliseconds: 1)),
+      throwsA(isA<UlinkSettingsException>()),
+    );
+
+    final timeout = UlinkSetResponseGate(UlinkSettingsKey.ssid);
+    await expectLater(
+      timeout.wait(const Duration(milliseconds: 1)),
+      throwsA(isA<UlinkSettingsException>()),
+    );
+  });
+
+  test('password text never appears in save failures', () async {
+    const password = 'not-for-diagnostics';
+    final gate = UlinkSetResponseGate(UlinkSettingsKey.password);
+    gate.accept(const UlinkSetReplyEvent(ok: false));
+    try {
+      await gate.wait(const Duration(milliseconds: 1));
+      fail('Expected a failed save.');
+    } catch (error) {
+      expect(error.toString(), isNot(contains(password)));
+    }
   });
 
   test('UUID config defaults stay unconfigured', () {
-    const config = UlinkBleProtocolConfig(namePrefix: 'ULINK', serviceUuid: '', commandCharacteristicUuid: '', responseCharacteristicUuid: '', ackTimeout: Duration(seconds: 1));
+    const config = UlinkBleProtocolConfig(
+      namePrefix: 'ULINK',
+      serviceUuid: '',
+      commandCharacteristicUuid: '',
+      responseCharacteristicUuid: '',
+      ackTimeout: Duration(seconds: 1),
+    );
     expect(config.isConfigured, isFalse);
   });
 }
