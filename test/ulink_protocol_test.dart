@@ -122,14 +122,77 @@ void main() {
     }
   });
 
-  test('UUID config defaults stay unconfigured', () {
+  test('Rev4 defaults configure U-Link without dart-defines', () {
+    final config = UlinkBleProtocolConfig.environment;
+    expect(config.namePrefix, UlinkBleProtocolConfig.productionNamePrefix);
+    expect(config.serviceUuid, UlinkBleProtocolConfig.productionServiceUuid);
+    expect(
+      config.commandCharacteristicUuid,
+      UlinkBleProtocolConfig.productionCommandCharacteristicUuid,
+    );
+    expect(
+      config.responseCharacteristicUuid,
+      UlinkBleProtocolConfig.productionResponseCharacteristicUuid,
+    );
+    expect(config.ackTimeout, UlinkBleProtocolConfig.productionAckTimeout);
+    expect(config.isConfigured, isTrue);
+  });
+
+  test('blank dart-defines fall back to Rev4 defaults', () {
+    final config = UlinkBleProtocolConfig.fromEnvironmentValues(
+      namePrefix: '  ',
+      serviceUuid: '\t',
+      commandCharacteristicUuid: ' ',
+      responseCharacteristicUuid: '',
+      ackTimeoutSeconds: '  ',
+    );
+    expect(config.namePrefix, UlinkBleProtocolConfig.productionNamePrefix);
+    expect(config.serviceUuid, UlinkBleProtocolConfig.productionServiceUuid);
+    expect(
+      config.commandCharacteristicUuid,
+      UlinkBleProtocolConfig.productionCommandCharacteristicUuid,
+    );
+    expect(
+      config.responseCharacteristicUuid,
+      UlinkBleProtocolConfig.productionResponseCharacteristicUuid,
+    );
+    expect(config.ackTimeout, UlinkBleProtocolConfig.productionAckTimeout);
+    expect(config.isConfigured, isTrue);
+  });
+
+  test('valid dart-defines override Rev4 defaults', () {
+    final config = UlinkBleProtocolConfig.fromEnvironmentValues(
+      namePrefix: 'ULINK-R5',
+      serviceUuid: '12345678-1234-1234-1234-1234567890ab',
+      commandCharacteristicUuid: '12345678-1234-1234-1234-1234567890ac',
+      responseCharacteristicUuid: '12345678-1234-1234-1234-1234567890ad',
+      ackTimeoutSeconds: '20',
+    );
+    expect(config.namePrefix, 'ULINK-R5');
+    expect(config.serviceUuid, '12345678-1234-1234-1234-1234567890ab');
+    expect(
+      config.commandCharacteristicUuid,
+      '12345678-1234-1234-1234-1234567890ac',
+    );
+    expect(
+      config.responseCharacteristicUuid,
+      '12345678-1234-1234-1234-1234567890ad',
+    );
+    expect(config.ackTimeout, const Duration(seconds: 20));
+    expect(config.isConfigured, isTrue);
+  });
+
+  test('invalid UUID configuration reports a clear error', () {
     const config = UlinkBleProtocolConfig(
       namePrefix: 'ULINK',
-      serviceUuid: '',
-      commandCharacteristicUuid: '',
-      responseCharacteristicUuid: '',
+      serviceUuid: 'not-a-uuid',
+      commandCharacteristicUuid:
+          UlinkBleProtocolConfig.productionCommandCharacteristicUuid,
+      responseCharacteristicUuid:
+          UlinkBleProtocolConfig.productionResponseCharacteristicUuid,
       ackTimeout: Duration(seconds: 1),
     );
     expect(config.isConfigured, isFalse);
+    expect(config.validationError, 'U-Link BLE service UUID is invalid.');
   });
 }

@@ -283,8 +283,9 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
 
   Future<void> connect(BluetoothDevice device) async {
     if (!config.isConfigured) {
-      throw const UlinkSettingsException(
-        'U-Link BLE protocol has not been configured yet.',
+      throw UlinkSettingsException(
+        config.validationError ??
+            'U-Link BLE protocol has not been configured yet.',
       );
     }
     _device = device;

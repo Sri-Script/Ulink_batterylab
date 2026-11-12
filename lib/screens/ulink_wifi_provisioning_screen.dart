@@ -2,11 +2,18 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/acknowledgement_sound_service.dart';
 import '../services/ulink_ble_provisioning_client.dart';
 
 class UlinkWifiProvisioningScreen extends StatefulWidget {
-  const UlinkWifiProvisioningScreen({super.key, required this.client});
+  const UlinkWifiProvisioningScreen({
+    super.key,
+    required this.client,
+    this.acknowledgementSound = const AcknowledgementSoundService(),
+  });
+
   final UlinkSettingsClient client;
+  final AcknowledgementSoundService acknowledgementSound;
 
   @override
   State<UlinkWifiProvisioningScreen> createState() =>
@@ -233,6 +240,8 @@ class _UlinkWifiProvisioningScreenState
         _saved[key] = value;
         _status[key] = 'Saved on U-Link';
       });
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted) await widget.acknowledgementSound.play();
     } catch (_) {
       if (mounted) {
         setState(() {

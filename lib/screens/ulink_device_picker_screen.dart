@@ -13,11 +13,13 @@ class UlinkDevicePickerScreen extends StatefulWidget {
   final UlinkBleProtocolConfig? config;
 
   @override
-  State<UlinkDevicePickerScreen> createState() => _UlinkDevicePickerScreenState();
+  State<UlinkDevicePickerScreen> createState() =>
+      _UlinkDevicePickerScreenState();
 }
 
 class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
-  late final UlinkBleProtocolConfig _config = widget.config ?? UlinkBleProtocolConfig.environment;
+  late final UlinkBleProtocolConfig _config =
+      widget.config ?? UlinkBleProtocolConfig.environment;
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   final Map<String, ScanResult> _results = <String, ScanResult>{};
   bool _scanning = false;
@@ -38,23 +40,22 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
     });
     try {
       if (!await PermissionService().requestBle()) {
-        throw StateError('Bluetooth permission is required to find U-Link devices.');
+        throw StateError(
+          'Bluetooth permission is required to find U-Link devices.',
+        );
       }
       if (!await FlutterBluePlus.isSupported) {
         throw StateError('Bluetooth LE is not supported on this device.');
       }
-      if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
-        await FlutterBluePlus.turnOn();
-      }
-      if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
-        throw StateError('Turn on Bluetooth to scan for U-Link devices.');
-      }
+      await _waitForBluetoothOn();
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
         if (!mounted) return;
         setState(() {
           for (final result in results) {
             final name = result.advertisementData.advName;
-            if (_matchesName(name)) _results[result.device.remoteId.str] = result;
+            if (_matchesName(name)) {
+              _results[result.device.remoteId.str] = result;
+            }
           }
         });
       });
@@ -62,14 +63,36 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
       if (mounted) setState(() => _scanning = false);
     } catch (error) {
-      if (mounted) setState(() {
-        _scanning = false;
-        _error = _clean(error);
-      });
+      if (mounted) {
+        setState(() {
+          _scanning = false;
+          _error = _clean(error);
+        });
+      }
     }
   }
 
-  bool _matchesName(String name) => name.toUpperCase().startsWith(_config.normalizedNamePrefix);
+  bool _matchesName(String name) =>
+      name.toUpperCase().startsWith(_config.normalizedNamePrefix);
+
+  Future<void> _waitForBluetoothOn() async {
+    // Subscribe before requesting Bluetooth so a phone that changes state
+    // immediately still delivers its ON event. The stream, rather than the
+    // cached state alone, is the readiness signal for starting a scan.
+    final adapterOn = FlutterBluePlus.adapterState
+        .where((state) => state == BluetoothAdapterState.on)
+        .timeout(
+          const Duration(seconds: 10),
+          onTimeout: (sink) => sink.addError(
+            StateError('Turn on Bluetooth to scan for U-Link devices.'),
+          ),
+        )
+        .first;
+    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+      await FlutterBluePlus.turnOn();
+    }
+    await adapterOn;
+  }
 
   Future<void> _stopScan() async {
     await _scanSubscription?.cancel();
@@ -83,7 +106,11 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
   Future<void> _connect(ScanResult result) async {
     await _stopScan();
     if (!_config.isConfigured) {
-      setState(() => _error = 'U-Link BLE protocol has not been configured yet.');
+      setState(() {
+        _error =
+            _config.validationError ??
+            'U-Link BLE protocol has not been configured yet.';
+      });
       return;
     }
     setState(() {
@@ -110,7 +137,8 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
     }
   }
 
-  String _clean(Object error) => error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
+  String _clean(Object error) =>
+      error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
 
   @override
   void dispose() {
@@ -131,7 +159,13 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  Expanded(child: Text(_scanning ? 'Scanning nearby U-Link devices…' : 'Select a nearby U-Link device.')),
+                  Expanded(
+                    child: Text(
+                      _scanning
+                          ? 'Scanning nearby U-Link devices…'
+                          : 'Select a nearby U-Link device.',
+                    ),
+                  ),
                   IconButton(
                     onPressed: _connecting ? null : _startScan,
                     tooltip: 'Scan again',
@@ -143,11 +177,16 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               ),
             Expanded(
               child: devices.isEmpty
-                  ? const Center(child: Text('No matching U-Link advertisements found.'))
+                  ? const Center(
+                      child: Text('No matching U-Link advertisements found.'),
+                    )
                   : ListView.separated(
                       itemCount: devices.length,
                       separatorBuilder: (_, _) => const Divider(height: 1),
@@ -156,9 +195,21 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
                         final name = result.advertisementData.advName;
                         return ListTile(
                           enabled: !_connecting,
-                          title: Text(name.isEmpty ? 'Unnamed U-Link device' : name),
-                          subtitle: Text('${result.device.remoteId.str}  •  RSSI ${result.rssi} dBm'),
-                          trailing: _connecting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.chevron_right),
+                          title: Text(
+                            name.isEmpty ? 'Unnamed U-Link device' : name,
+                          ),
+                          subtitle: Text(
+                            '${result.device.remoteId.str}  •  RSSI ${result.rssi} dBm',
+                          ),
+                          trailing: _connecting
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.chevron_right),
                           onTap: () => _connect(result),
                         );
                       },
