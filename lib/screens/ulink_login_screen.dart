@@ -3,11 +3,14 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
 import 'ulink_device_picker_screen.dart';
+import '../services/si_access_repository.dart';
+import 'si_company_selection_screen.dart';
 
 class UlinkLoginScreen extends StatefulWidget {
-  const UlinkLoginScreen({super.key, this.signIn});
+  const UlinkLoginScreen({super.key, this.signIn, this.isSystemIntegrator});
 
   final Future<UserCredential> Function(String email, String password)? signIn;
+  final Future<bool> Function(User user)? isSystemIntegrator;
 
   @override
   State<UlinkLoginScreen> createState() => _UlinkLoginScreenState();
@@ -27,27 +30,47 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
     }
     setState(() => _submitting = true);
     try {
+      late final UserCredential credential;
       if (widget.signIn != null) {
-        await widget.signIn!(email, _password.text);
+        credential = await widget.signIn!(email, _password.text);
       } else {
         if (Firebase.apps.isEmpty) await Firebase.initializeApp();
-        await FirebaseAuth.instance.signInWithEmailAndPassword(
+        credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
           email: email,
           password: _password.text,
         );
       }
+      final user = credential.user;
+      if (user == null) throw FirebaseAuthException(code: 'no-user');
+      final isSi = widget.isSystemIntegrator != null
+          ? await widget.isSystemIntegrator!(user)
+          : await SiAccessRepository().isSystemIntegrator(user);
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(builder: (_) => const UlinkDevicePickerScreen()),
+        MaterialPageRoute<void>(
+          builder: (_) => isSi
+              ? SiCompanySelectionScreen(siUid: user.uid)
+              : const UlinkDevicePickerScreen(),
+        ),
       );
     } on FirebaseAuthException catch (error) {
-      if (mounted) _message(error.message ?? 'Authentication failed. Please try again.', error: true);
+      if (mounted) {
+        _message(
+          error.message ?? 'Authentication failed. Please try again.',
+          error: true,
+        );
+      }
     } catch (_) {
       if (mounted) {
-        _message('Firebase authentication is unavailable. Check the app setup and try again.', error: true);
+        _message(
+          'Firebase authentication is unavailable. Check the app setup and try again.',
+          error: true,
+        );
       }
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
     }
   }
 
@@ -76,7 +99,10 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Sign in to provision a U-Link device.', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Sign in to provision a U-Link device.',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 20),
             TextField(
               controller: _email,
@@ -92,8 +118,11 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
               decoration: InputDecoration(
                 labelText: 'Password',
                 suffixIcon: IconButton(
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                  icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
+                  onPressed: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                  ),
                   tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                 ),
               ),

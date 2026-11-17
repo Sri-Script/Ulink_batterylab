@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isSi() {
+      return signedIn() &&
+        (request.auth.token.role == 'si' ||
+         request.auth.token.role == 'system_integrator' ||
+         request.auth.token.systemIntegrator == true);
+    }
+    function companyAssigned(companyId) {
+      return isSi() && request.auth.uid in
+        get(/databases/$(database)/documents/companies/$(companyId)).data.systemIntegratorIds;
+    }
+
+    match /companies/{companyId} {
+      allow get, list: if isSi() && request.auth.uid in resource.data.systemIntegratorIds;
+      allow write: if false;
+    }
+
+    match /ucodes/{ucode} {
+      allow get, list: if isSi() && resource.data.assignedSiUid == request.auth.uid &&
+        (resource.data.status == 'available' ||
+         (resource.data.status == 'flashed' && companyAssigned(resource.data.companyId)) ||
+         resource.data.status == 'reserving' ||
+         resource.data.status == 'pending_verification' ||
+         resource.data.status == 'recovery_required');
+      allow update: if isSi() && resource.data.assignedSiUid == request.auth.uid &&
+        ((resource.data.status == 'available' && resource.data.companyId == null &&
+          request.resource.data.status == 'reserving' &&
+          request.resource.data.reservationId is string &&
+          request.resource.data.companyId == null) ||
+         (resource.data.status == 'reserving' && resource.data.companyId == null &&
+          resource.data.reservationId == request.resource.data.reservationId &&
+          (request.resource.data.status == 'available' ||
+           request.resource.data.status == 'pending_verification' ||
+           request.resource.data.status == 'recovery_required') &&
+          request.resource.data.companyId == null));
+      allow create, delete: if false;
+    }
+
+    match /provisioningEvents/{eventId} {
+      allow create: if isSi() && request.resource.data.siUid == request.auth.uid &&
+        request.resource.data.type == 'ucode_write_acknowledged' &&
+        request.resource.data.status == 'acknowledged';
+      allow get, list: if isSi() && resource.data.siUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}
