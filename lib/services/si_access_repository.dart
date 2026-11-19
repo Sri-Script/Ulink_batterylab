@@ -10,32 +10,68 @@ class SiAccessRepository {
   final FirebaseFirestore _firestore;
 
   Future<bool> isSystemIntegrator(User user) async {
-    final token = await user.getIdTokenResult(true);
+    late final IdTokenResult token;
+    try {
+      // Refresh exactly once before examining custom claims so a recently
+      // granted SI role is not routed through the normal U-Link flow.
+      token = await user.getIdTokenResult(true);
+    } catch (error) {
+      throw SiRoleLookupException(
+        'Unable to refresh the signed-in user role.',
+        error,
+      );
+    }
     final claims = token.claims ?? const <String, dynamic>{};
-    if (claims['role'] == 'si' ||
-        claims['role'] == 'system_integrator' ||
-        claims['systemIntegrator'] == true) {
+    if (SiRolePolicy.isCustomClaimSystemIntegratorRole(claims['role'])) {
       return true;
     }
 
-    // Legacy installations can retain role information in users/{uid}. This
-    // is only a navigation hint; deployed rules must independently require an
-    // SI custom claim before returning provisioning records.
+    // Legacy installations retain this value in users/{uid}. A profile read
+    // failure is a real authorization/setup error, not evidence of a normal
+    // user, so callers must present it instead of taking the normal route.
     DocumentSnapshot<Map<String, dynamic>> profile;
     try {
       profile = await _firestore.collection('users').doc(user.uid).get();
-    } catch (_) {
-      // A normal user may not have permission to read an SI profile document.
-      return false;
+    } catch (error) {
+      throw SiRoleLookupException(
+        'Unable to read the System Integrator profile.',
+        error,
+      );
     }
     final data = profile.data();
     if (data == null) return false;
-    final role = data['role'];
-    final roles = data['roles'];
+    return SiRolePolicy.isLegacyProfileSystemIntegratorRole(data['role']);
+  }
+}
+
+class SiRoleLookupException implements Exception {
+  const SiRoleLookupException(this.message, [this.cause]);
+
+  final String message;
+  final Object? cause;
+
+  @override
+  String toString() => message;
+}
+
+/// Shared pure role policy for Firebase custom claims and the legacy profile.
+class SiRolePolicy {
+  const SiRolePolicy._();
+
+  static bool isCustomClaimSystemIntegratorRole(Object? value) {
+    final role = _normalized(value);
+    return role == 'si' || role == 'system_integrator';
+  }
+
+  static bool isLegacyProfileSystemIntegratorRole(Object? value) {
+    final role = _normalized(value);
     return role == 'si' ||
         role == 'system_integrator' ||
-        data['systemIntegrator'] == true ||
-        (roles is List &&
-            roles.any((item) => item == 'si' || item == 'system_integrator'));
+        role == 'system integrator';
+  }
+
+  static String? _normalized(Object? value) {
+    if (value is! String) return null;
+    return value.trim().toLowerCase();
   }
 }

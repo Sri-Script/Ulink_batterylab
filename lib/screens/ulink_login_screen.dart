@@ -2,15 +2,33 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
-import 'ulink_device_picker_screen.dart';
+import '../services/provisioning_repository.dart';
 import '../services/si_access_repository.dart';
 import 'si_company_selection_screen.dart';
+import 'ulink_device_picker_screen.dart';
+
+/// Test seam for exercising post-login routing without a live Firebase user.
+class UlinkLoginSession {
+  const UlinkLoginSession({required this.uid, required this.resolveSiRole});
+
+  final String uid;
+  final Future<bool> Function() resolveSiRole;
+}
 
 class UlinkLoginScreen extends StatefulWidget {
-  const UlinkLoginScreen({super.key, this.signIn, this.isSystemIntegrator});
+  const UlinkLoginScreen({
+    super.key,
+    this.signIn,
+    this.isSystemIntegrator,
+    this.loginSession,
+    this.siProvisioningRepository,
+  });
 
   final Future<UserCredential> Function(String email, String password)? signIn;
   final Future<bool> Function(User user)? isSystemIntegrator;
+  final Future<UlinkLoginSession> Function(String email, String password)?
+  loginSession;
+  final ProvisioningRepository? siProvisioningRepository;
 
   @override
   State<UlinkLoginScreen> createState() => _UlinkLoginScreenState();
@@ -30,26 +48,38 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
     }
     setState(() => _submitting = true);
     try {
-      late final UserCredential credential;
-      if (widget.signIn != null) {
-        credential = await widget.signIn!(email, _password.text);
+      late final String uid;
+      late final bool isSi;
+      if (widget.loginSession != null) {
+        final session = await widget.loginSession!(email, _password.text);
+        uid = session.uid;
+        isSi = await session.resolveSiRole();
       } else {
-        if (Firebase.apps.isEmpty) await Firebase.initializeApp();
-        credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-          email: email,
-          password: _password.text,
-        );
+        late final UserCredential credential;
+        if (widget.signIn != null) {
+          credential = await widget.signIn!(email, _password.text);
+        } else {
+          if (Firebase.apps.isEmpty) await Firebase.initializeApp();
+          credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+            email: email,
+            password: _password.text,
+          );
+        }
+        final user = credential.user;
+        if (user == null) throw FirebaseAuthException(code: 'no-user');
+        uid = user.uid;
+        isSi = widget.isSystemIntegrator != null
+            ? await widget.isSystemIntegrator!(user)
+            : await SiAccessRepository().isSystemIntegrator(user);
       }
-      final user = credential.user;
-      if (user == null) throw FirebaseAuthException(code: 'no-user');
-      final isSi = widget.isSystemIntegrator != null
-          ? await widget.isSystemIntegrator!(user)
-          : await SiAccessRepository().isSystemIntegrator(user);
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
           builder: (_) => isSi
-              ? SiCompanySelectionScreen(siUid: user.uid)
+              ? SiCompanySelectionScreen(
+                  siUid: uid,
+                  repository: widget.siProvisioningRepository,
+                )
               : const UlinkDevicePickerScreen(),
         ),
       );
@@ -57,6 +87,13 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
       if (mounted) {
         _message(
           error.message ?? 'Authentication failed. Please try again.',
+          error: true,
+        );
+      }
+    } on SiRoleLookupException catch (_) {
+      if (mounted) {
+        _message(
+          'We could not verify your System Integrator access. Check your Firebase permissions and try again.',
           error: true,
         );
       }

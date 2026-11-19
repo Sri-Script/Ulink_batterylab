@@ -29,7 +29,7 @@ class _SiCompanySelectionScreenState extends State<SiCompanySelectionScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Select company')),
+    appBar: AppBar(title: const Text('Select Company')),
     body: FutureBuilder<List<ProvisioningCompany>>(
       future: _companies,
       builder: (context, snapshot) {
@@ -47,7 +47,9 @@ class _SiCompanySelectionScreenState extends State<SiCompanySelectionScreen> {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(24),
-              child: Text('No companies are assigned to this SI account.'),
+              child: Text(
+                'No companies are assigned to this System Integrator.',
+              ),
             ),
           );
         }

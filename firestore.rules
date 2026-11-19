@@ -18,6 +18,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Every authenticated user may read only their own legacy profile so the
+    // login route can distinguish a normal user from an SI without scanning
+    // user records. Profile writes remain server-controlled.
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
+    }
+
     match /ucodes/{ucode} {
       allow get, list: if isSi() && resource.data.assignedSiUid == request.auth.uid &&
         (resource.data.status == 'available' ||
