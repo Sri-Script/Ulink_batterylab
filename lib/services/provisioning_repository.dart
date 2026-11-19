@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/si_provisioning_models.dart';
 
@@ -32,6 +33,21 @@ class ProvisioningException implements Exception {
   String toString() => message;
 }
 
+/// Runs the restrictive SI company query against Firestore's server rather
+/// than allowing an empty local cache to satisfy it.
+Future<T> fetchCompaniesFromServer<T>(
+  Future<T> Function(GetOptions options) fetch,
+) async {
+  try {
+    return await fetch(const GetOptions(source: Source.server));
+  } on FirebaseException {
+    throw const ProvisioningException(
+      'Could not reach the server to load your assigned companies. '
+      'Check your connection and try again.',
+    );
+  }
+}
+
 class FirestoreProvisioningRepository implements ProvisioningRepository {
   FirestoreProvisioningRepository({FirebaseFirestore? firestore})
     : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -47,10 +63,23 @@ class FirestoreProvisioningRepository implements ProvisioningRepository {
 
   @override
   Future<List<ProvisioningCompany>> companiesForSi(String siUid) async {
-    final snapshot = await _companies
-        .where('systemIntegratorIds', arrayContains: siUid)
-        .orderBy('name')
-        .get();
+    if (kDebugMode) {
+      debugPrint(
+        'SI company query: projectId=${_firestore.app.options.projectId}, '
+        'siUid=$siUid',
+      );
+    }
+    final snapshot = await fetchCompaniesFromServer(
+      (options) => _companies
+          .where('systemIntegratorIds', arrayContains: siUid)
+          .get(options),
+    );
+    if (kDebugMode) {
+      debugPrint(
+        'SI company query result: count=${snapshot.docs.length}, '
+        'ids=${snapshot.docs.map((document) => document.id).toList()}',
+      );
+    }
     return snapshot.docs.map(ProvisioningCompany.fromFirestore).toList();
   }
 

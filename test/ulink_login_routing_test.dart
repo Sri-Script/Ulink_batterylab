@@ -31,11 +31,16 @@ void main() {
       roleLookup: () async => SiRolePolicy.isLegacyProfileSystemIntegratorRole(
         ' system integrator ',
       ),
+      repository: _CompanyListRepository(const [
+        ProvisioningCompany(id: 'assigned', name: 'Assigned Company'),
+      ]),
     );
 
     await _signIn(tester);
+    await tester.pumpAndSettle();
 
     expect(find.byType(SiCompanySelectionScreen), findsOneWidget);
+    expect(find.text('Assigned Company'), findsOneWidget);
   });
 
   testWidgets('normal user still follows the existing U-Link route', (
@@ -66,6 +71,57 @@ void main() {
     expect(
       find.text('No companies are assigned to this System Integrator.'),
       findsOneWidget,
+    );
+    expect(find.text('Refresh'), findsOneWidget);
+  });
+
+  testWidgets('Refresh reruns the company query after an empty server result', (
+    tester,
+  ) async {
+    final repository = _RefreshingCompanyRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SiCompanySelectionScreen(siUid: 'si-1', repository: repository),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('No companies are assigned to this System Integrator.'),
+      findsOneWidget,
+    );
+    expect(repository.companyQueryCount, 1);
+
+    await tester.tap(find.text('Refresh'));
+    await tester.pumpAndSettle();
+
+    expect(repository.companyQueryCount, 2);
+    expect(find.text('Test Company'), findsOneWidget);
+  });
+
+  testWidgets('companies are alphabetically sorted in the selection UI', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SiCompanySelectionScreen(
+          siUid: 'si-1',
+          repository: _CompanyListRepository(const [
+            ProvisioningCompany(id: 'zebra', name: 'zebra'),
+            ProvisioningCompany(id: 'alpha', name: 'alpha'),
+            ProvisioningCompany(id: 'middle', name: 'Middle'),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widgetList<ListTile>(find.byType(ListTile))
+          .map((tile) => (tile.title! as Text).data)
+          .toList(),
+      ['alpha', 'Middle', 'zebra'],
     );
   });
 
@@ -113,12 +169,13 @@ void main() {
 Future<void> _pumpLogin(
   WidgetTester tester, {
   required Future<bool> Function() roleLookup,
+  ProvisioningRepository? repository,
 }) => tester.pumpWidget(
   MaterialApp(
     home: UlinkLoginScreen(
       loginSession: (_, _) async =>
           UlinkLoginSession(uid: 'si-or-user', resolveSiRole: roleLookup),
-      siProvisioningRepository: _EmptyProvisioningRepository(),
+      siProvisioningRepository: repository ?? _EmptyProvisioningRepository(),
     ),
   ),
 );
@@ -167,4 +224,26 @@ class _EmptyProvisioningRepository implements ProvisioningRepository {
   @override
   Future<void> finalizeVerifiedUcode(UcodeReservation reservation) =>
       throw UnimplementedError();
+}
+
+class _CompanyListRepository extends _EmptyProvisioningRepository {
+  _CompanyListRepository(this.companies);
+
+  final List<ProvisioningCompany> companies;
+
+  @override
+  Future<List<ProvisioningCompany>> companiesForSi(String siUid) async =>
+      List<ProvisioningCompany>.of(companies);
+}
+
+class _RefreshingCompanyRepository extends _EmptyProvisioningRepository {
+  int companyQueryCount = 0;
+
+  @override
+  Future<List<ProvisioningCompany>> companiesForSi(String siUid) async {
+    companyQueryCount++;
+    return companyQueryCount == 1
+        ? []
+        : const [ProvisioningCompany(id: 'test-company', name: 'Test Company')];
+  }
 }

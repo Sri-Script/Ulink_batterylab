@@ -2,11 +2,18 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    function hasLegacySiProfile() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in
+          ['si', 'system_integrator', 'system integrator'];
+    }
     function isSi() {
       return signedIn() &&
         (request.auth.token.role == 'si' ||
          request.auth.token.role == 'system_integrator' ||
-         request.auth.token.systemIntegrator == true);
+         request.auth.token.systemIntegrator == true ||
+         hasLegacySiProfile());
     }
     function companyAssigned(companyId) {
       return isSi() && request.auth.uid in
