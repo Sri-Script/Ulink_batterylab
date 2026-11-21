@@ -2,15 +2,36 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../services/permission_service.dart';
 import '../services/ulink_ble_protocol_config.dart';
 import '../services/ulink_ble_provisioning_client.dart';
+import '../services/ulink_login_preferences.dart';
+import 'ulink_login_screen.dart';
 import 'ulink_wifi_provisioning_screen.dart';
 
+typedef UlinkSettingsClientConnector =
+    Future<UlinkSettingsClient> Function(
+      BluetoothDevice device,
+      UlinkBleProtocolConfig config,
+    );
+
 class UlinkDevicePickerScreen extends StatefulWidget {
-  const UlinkDevicePickerScreen({super.key, this.config});
+  const UlinkDevicePickerScreen({
+    super.key,
+    this.config,
+    this.loginPreferences,
+    this.initialResults = const <ScanResult>[],
+    this.startScanning = true,
+    this.clientConnector,
+  });
   final UlinkBleProtocolConfig? config;
+  final UlinkLoginPreferences? loginPreferences;
+  final List<ScanResult> initialResults;
+  final bool startScanning;
+  final UlinkSettingsClientConnector? clientConnector;
 
   @override
   State<UlinkDevicePickerScreen> createState() =>
@@ -24,12 +45,18 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
   final Map<String, ScanResult> _results = <String, ScanResult>{};
   bool _scanning = false;
   bool _connecting = false;
+  bool _loggingOut = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startScan());
+    for (final result in widget.initialResults) {
+      _results[result.device.remoteId.str] = result;
+    }
+    if (widget.startScanning) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startScan());
+    }
   }
 
   Future<void> _startScan() async {
@@ -117,23 +144,55 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
       _connecting = true;
       _error = null;
     });
-    final client = UlinkBleProvisioningClient(config: _config);
+    final connector = widget.clientConnector;
+    UlinkSettingsClient? client;
     try {
-      await client.connect(result.device);
+      if (connector == null) {
+        final bleClient = UlinkBleProvisioningClient(config: _config);
+        await bleClient.connect(result.device);
+        client = bleClient;
+      } else {
+        client = await connector(result.device, _config);
+      }
       if (!mounted) {
-        await client.disconnect();
+        await client!.disconnect();
         return;
       }
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => UlinkWifiProvisioningScreen(client: client),
+          builder: (_) => UlinkWifiProvisioningScreen(client: client!),
         ),
       );
     } catch (error) {
-      await client.disconnect();
+      await client?.disconnect();
       if (mounted) setState(() => _error = _clean(error));
     } finally {
       if (mounted) setState(() => _connecting = false);
+    }
+  }
+
+  Future<void> _logout() async {
+    if (_loggingOut) return;
+    setState(() => _loggingOut = true);
+    try {
+      try {
+        await (widget.loginPreferences ??
+                SharedPreferencesUlinkLoginPreferences())
+            .clearEmail();
+      } finally {
+        if (Firebase.apps.isNotEmpty) await FirebaseAuth.instance.signOut();
+      }
+      if (!mounted) return;
+      await Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute<void>(builder: (_) => const UlinkLoginScreen()),
+        (route) => route.isFirst,
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Could not sign out. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _loggingOut = false);
     }
   }
 
@@ -151,7 +210,16 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
     final devices = _results.values.toList()
       ..sort((a, b) => b.rssi.compareTo(a.rssi));
     return Scaffold(
-      appBar: AppBar(title: const Text('Choose U-Link device')),
+      appBar: AppBar(
+        title: const Text('Choose U-Link device'),
+        actions: [
+          UlinkLogoutButton(
+            loginPreferences: widget.loginPreferences,
+            onLoggedOut: _logout,
+            loggingOut: _loggingOut,
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -220,4 +288,53 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
       ),
     );
   }
+}
+
+class UlinkLogoutButton extends StatelessWidget {
+  const UlinkLogoutButton({
+    super.key,
+    this.loginPreferences,
+    this.onLoggedOut,
+    this.loggingOut = false,
+  });
+
+  final UlinkLoginPreferences? loginPreferences;
+  final Future<void> Function()? onLoggedOut;
+  final bool loggingOut;
+
+  Future<void> _logout(BuildContext context) async {
+    if (onLoggedOut != null) {
+      await onLoggedOut!();
+      return;
+    }
+    try {
+      try {
+        await (loginPreferences ?? SharedPreferencesUlinkLoginPreferences())
+            .clearEmail();
+      } finally {
+        if (Firebase.apps.isNotEmpty) await FirebaseAuth.instance.signOut();
+      }
+      if (context.mounted) {
+        await Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute<void>(builder: (_) => const UlinkLoginScreen()),
+          (route) => route.isFirst,
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not sign out. Please try again.'),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    onPressed: loggingOut ? null : () => _logout(context),
+    icon: const Icon(Icons.logout),
+    tooltip: 'Log out',
+  );
 }

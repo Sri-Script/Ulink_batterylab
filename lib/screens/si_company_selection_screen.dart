@@ -2,17 +2,21 @@ import 'package:flutter/material.dart';
 
 import '../models/si_provisioning_models.dart';
 import '../services/provisioning_repository.dart';
+import '../services/ulink_login_preferences.dart';
 import 'si_company_dashboard_screen.dart';
+import 'ulink_device_picker_screen.dart';
 
 class SiCompanySelectionScreen extends StatefulWidget {
   const SiCompanySelectionScreen({
     super.key,
     required this.siUid,
     this.repository,
+    this.loginPreferences,
   });
 
   final String siUid;
   final ProvisioningRepository? repository;
+  final UlinkLoginPreferences? loginPreferences;
 
   @override
   State<SiCompanySelectionScreen> createState() =>
@@ -45,49 +49,77 @@ class _SiCompanySelectionScreenState extends State<SiCompanySelectionScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Select Company')),
-    body: FutureBuilder<List<ProvisioningCompany>>(
-      future: _companies,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return _LoadError(
-            message: snapshot.error is ProvisioningException
-                ? snapshot.error.toString()
-                : 'Could not load your assigned companies.',
-            onRetry: _reloadCompanies,
-          );
-        }
-        final companies = snapshot.data ?? const <ProvisioningCompany>[];
-        if (companies.isEmpty) {
-          return _EmptyCompanies(onRefresh: _reloadCompanies);
-        }
-        return ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: companies.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            final company = companies[index];
-            return Card(
-              child: ListTile(
-                title: Text(company.name),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => SiCompanyDashboardScreen(
-                      siUid: widget.siUid,
-                      company: company,
-                      repository: _repository,
-                    ),
+    appBar: AppBar(
+      title: const Text('Select Company'),
+      actions: [
+        UlinkLogoutButton(loginPreferences: widget.loginPreferences),
+      ],
+    ),
+    body: SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: FilledButton.icon(
+              icon: const Icon(Icons.bluetooth_connected),
+              label: const Text('Connect to U-Link Settings'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => UlinkDevicePickerScreen(
+                    loginPreferences: widget.loginPreferences,
                   ),
                 ),
               ),
-            );
-          },
-        );
-      },
+            ),
+          ),
+          Expanded(
+            child: FutureBuilder<List<ProvisioningCompany>>(
+              future: _companies,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return _LoadError(
+                    message: snapshot.error is ProvisioningException
+                        ? snapshot.error.toString()
+                        : 'Could not load your assigned companies.',
+                    onRetry: _reloadCompanies,
+                  );
+                }
+                final companies = snapshot.data ?? const <ProvisioningCompany>[];
+                if (companies.isEmpty) {
+                  return _EmptyCompanies(onRefresh: _reloadCompanies);
+                }
+                return ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: companies.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final company = companies[index];
+                    return Card(
+                      child: ListTile(
+                        title: Text(company.name),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => SiCompanyDashboardScreen(
+                              siUid: widget.siUid,
+                              company: company,
+                              repository: _repository,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }

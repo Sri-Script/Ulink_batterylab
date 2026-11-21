@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/provisioning_repository.dart';
 import '../services/si_access_repository.dart';
+import '../services/ulink_login_preferences.dart';
 import 'si_company_selection_screen.dart';
 import 'ulink_device_picker_screen.dart';
 
@@ -22,6 +23,7 @@ class UlinkLoginScreen extends StatefulWidget {
     this.isSystemIntegrator,
     this.loginSession,
     this.siProvisioningRepository,
+    this.loginPreferences,
   });
 
   final Future<UserCredential> Function(String email, String password)? signIn;
@@ -29,6 +31,7 @@ class UlinkLoginScreen extends StatefulWidget {
   final Future<UlinkLoginSession> Function(String email, String password)?
   loginSession;
   final ProvisioningRepository? siProvisioningRepository;
+  final UlinkLoginPreferences? loginPreferences;
 
   @override
   State<UlinkLoginScreen> createState() => _UlinkLoginScreenState();
@@ -39,9 +42,28 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
   final _password = TextEditingController();
   bool _obscurePassword = true;
   bool _submitting = false;
+  late final UlinkLoginPreferences _loginPreferences =
+      widget.loginPreferences ?? SharedPreferencesUlinkLoginPreferences();
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreEmail();
+  }
+
+  Future<void> _restoreEmail() async {
+    try {
+      final email = await _loginPreferences.readEmail();
+      if (mounted && email != null) {
+        setState(() => _email.text = email);
+      }
+    } catch (_) {
+      // Remembering an email is optional and must never block sign-in.
+    }
+  }
 
   Future<void> _submit() async {
-    final email = _email.text.trim();
+    final email = _email.text.trim().toLowerCase();
     if (email.isEmpty || _password.text.isEmpty) {
       _message('Enter an email address and password.', error: true);
       return;
@@ -72,6 +94,11 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
             ? await widget.isSystemIntegrator!(user)
             : await SiAccessRepository().isSystemIntegrator(user);
       }
+      try {
+        await _loginPreferences.saveEmail(email);
+      } catch (_) {
+        // A local preference failure must not discard a valid Firebase login.
+      }
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
@@ -79,8 +106,9 @@ class _UlinkLoginScreenState extends State<UlinkLoginScreen> {
               ? SiCompanySelectionScreen(
                   siUid: uid,
                   repository: widget.siProvisioningRepository,
+                  loginPreferences: _loginPreferences,
                 )
-              : const UlinkDevicePickerScreen(),
+              : UlinkDevicePickerScreen(loginPreferences: _loginPreferences),
         ),
       );
     } on FirebaseAuthException catch (error) {
