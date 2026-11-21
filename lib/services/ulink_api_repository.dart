@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
@@ -18,6 +19,8 @@ class UlinkApiException implements Exception {
   @override
   String toString() => message;
 }
+
+enum ApiLogoutResult { serverConfirmed, localOnly, noSession }
 
 class ApiLoginResult {
   const ApiLoginResult({
@@ -94,28 +97,137 @@ class UlinkApiRepository {
     'UlinkID': ulinkId,
   }, ApiDevice.fromJson);
 
-  Future<void> logout() async {
+  Future<ApiLogoutResult> logout() async {
     final session = await restoreSession();
+    if (session == null) return ApiLogoutResult.noSession;
+    var confirmed = false;
     try {
-      if (session != null) {
-        await _client.post(
-          _uri('/api/v1/auth/Logout'),
-          headers: <String, String>{
-            'Accept': 'application/json',
-            'Authorization': 'Bearer ${session.accessToken}',
-          },
-        );
-      }
+      final response = await _client.post(
+        _uri('/api/v1/auth/Logout'),
+        headers: <String, String>{
+          'Accept': 'application/json',
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+      );
+      confirmed = response.statusCode == 200;
     } catch (_) {
-      // Local sign-out is still authoritative for this device.
+      confirmed = false;
     } finally {
       await clearSession();
     }
+    return confirmed ? ApiLogoutResult.serverConfirmed : ApiLogoutResult.localOnly;
   }
 
   Future<void> clearSession() async {
     _session = null;
     await _store.clear();
+  }
+
+  Future<List<ApiUlink>> updateUlinkProvisioning({
+    required String companyId,
+    required String ulinkId,
+    required bool flashed,
+    String? idempotencyKey,
+  }) async {
+    final session = await _validSession();
+    final request = ApiProvisioningRequest(
+      kind: ApiProvisioningKind.ulink,
+      userId: session.userId,
+      companyId: companyId,
+      ulinkId: ulinkId,
+      isFlashed: flashed ? 1 : 0,
+    );
+    await _sendProvisioning(session, request, idempotencyKey: idempotencyKey);
+    return getCompanyUlinks(userId: session.userId, companyId: companyId);
+  }
+
+  Future<void> updateDeviceProvisioning({
+    required String ulinkId,
+    required String deviceId,
+    required bool flashed,
+    String? idempotencyKey,
+  }) async {
+    final session = await _validSession();
+    if (session.userRole != 'CA') {
+      throw const UlinkApiException('Only Company Admin users can provision devices.');
+    }
+    final request = ApiProvisioningRequest(
+      kind: ApiProvisioningKind.device,
+      userId: session.userId,
+      ulinkId: ulinkId,
+      deviceId: deviceId,
+      isFlashed: flashed ? 1 : 0,
+    );
+    await _sendProvisioning(session, request, idempotencyKey: idempotencyKey);
+  }
+
+  /// Retries only the exact operation previously persisted by this session.
+  /// The caller must make this an explicit recovery choice after an unknown
+  /// network result; no automatic reset or retry is performed.
+  Future<bool> retryPendingProvisioning() async {
+    final pending = await _store.readPending();
+    final session = await restoreSession();
+    if (pending == null || session == null ||
+        pending.userId != session.userId || pending.userRole != session.userRole) {
+      return false;
+    }
+    final validSession = await _validSession();
+    final response = await _client.put(
+      _uri(pending.endpoint),
+      headers: <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': 'Bearer ${validSession.accessToken}',
+        'Idempotency-Key': pending.idempotencyKey,
+      },
+      body: jsonEncode(pending.body),
+    );
+    final json = _decode(response);
+    if (response.statusCode != 200) _throwServer(json, response.statusCode);
+    _requireSuccess(json, statusCode: response.statusCode);
+    await _store.clearPending();
+    return true;
+  }
+
+  Future<void> _sendProvisioning(
+    ApiSession session,
+    ApiProvisioningRequest request, {
+    String? idempotencyKey,
+  }) async {
+    final key = idempotencyKey ?? _newUuid();
+    final endpoint = request.kind == ApiProvisioningKind.ulink
+        ? '/api/v1/ulinks/UpdateUlinkProvisioning'
+        : '/api/v1/devices/UpdateDeviceProvisioning';
+    final pending = PendingApiOperation(
+      endpoint: endpoint,
+      body: request.toJson(),
+      idempotencyKey: key,
+      userId: session.userId,
+      userRole: session.userRole,
+      createdAtUtc: _now().toUtc(),
+      kind: request.kind,
+    );
+    await _store.savePending(pending);
+    try {
+      final response = await _client.put(
+        _uri(endpoint),
+        headers: <String, String>{
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Idempotency-Key': key,
+        },
+        body: jsonEncode(request.toJson()),
+      );
+      final json = _decode(response);
+      if (response.statusCode != 200) _throwServer(json, response.statusCode);
+      _requireSuccess(json, statusCode: response.statusCode);
+      await _store.clearPending();
+    } catch (_) {
+      // Keep the exact pending body/key so the caller can explicitly retry an
+      // unknown result with the same operation identity and session.
+      rethrow;
+    }
   }
 
   Future<List<T>> _readList<T>(
@@ -191,7 +303,7 @@ class UlinkApiRepository {
         body: jsonEncode(<String, String>{'RefreshToken': old.refreshToken}),
       );
       if (response.statusCode != 200)
-        throw const UlinkApiException(
+        throw UlinkApiException(
           'Your session has ended. Sign in again.',
           statusCode: response.statusCode,
         );
@@ -241,6 +353,15 @@ class UlinkApiRepository {
   };
 }
 
+String _newUuid() {
+  final random = Random.secure();
+  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+}
+
 /// Public client name used by integrations that do not need repository
 /// terminology. It deliberately exposes the same read-only API surface.
 class UlinkApiClient extends UlinkApiRepository {
@@ -280,7 +401,7 @@ Never _throwServer(JsonMap json, int? statusCode) {
 
 List<T> _list<T>(JsonMap json, String key, T Function(JsonMap) convert) {
   final value = json[key];
-  if (value is! List) return const <T>[];
+    if (value is! List) return <T>[];
   return value
       .whereType<Map>()
       .map((item) => convert(Map<String, dynamic>.from(item)))

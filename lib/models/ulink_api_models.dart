@@ -16,7 +16,7 @@ class ApiSession {
 
   factory ApiSession.fromLoginJson(JsonMap json) {
     final tokens = _map(json['Tokens']);
-    final user = _map(json['User']);
+    final user = _map(json['User']) ?? const <String, dynamic>{};
     final role = _string(json, 'UserRole') ?? _string(user, 'UserRole');
     final userId = _id(json, 'UserId') ?? _id(user, 'UserId');
     final userName = _string(json, 'UserName') ?? _string(user, 'UserName');
@@ -202,6 +202,52 @@ class ApiParamTemplate {
   final String id;
   final String name;
   final String? code;
+}
+
+enum ApiProvisioningKind { ulink, device }
+
+class ApiProvisioningRequest {
+  const ApiProvisioningRequest({
+    required this.kind,
+    required this.userId,
+    required this.ulinkId,
+    required this.isFlashed,
+    this.companyId,
+    this.deviceId,
+  });
+  final ApiProvisioningKind kind;
+  final String userId;
+  final String? companyId;
+  final String ulinkId;
+  final String? deviceId;
+  final int isFlashed;
+
+  JsonMap toJson() => <String, dynamic>{
+    'UserId': userId,
+    if (companyId != null) 'CompanyID': companyId,
+    'UlinkID': ulinkId,
+    if (deviceId != null) 'DeviceID': deviceId,
+    'IsFlashed': isFlashed,
+  };
+}
+
+class PendingApiOperation {
+  const PendingApiOperation({
+    required this.endpoint,
+    required this.body,
+    required this.idempotencyKey,
+    required this.userId,
+    required this.userRole,
+    required this.createdAtUtc,
+    required this.kind,
+  });
+  final String endpoint;
+  final JsonMap body;
+  final String idempotencyKey;
+  final String userId;
+  final String userRole;
+  final DateTime createdAtUtc;
+  final ApiProvisioningKind kind;
 }
 
 JsonMap? _map(Object? value) =>

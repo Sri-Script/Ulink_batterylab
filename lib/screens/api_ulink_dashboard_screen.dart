@@ -68,7 +68,7 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
           if (_login.ulinksInStock.isEmpty) const _Empty('No U-Links in stock.'),
           ..._login.ulinksInStock.map((ulink) => Card(child: _UlinkTile(ulink: ulink))),
           const SizedBox(height: 16),
-          Tooltip(message: 'Waiting for the backend stock-to-company assignment operation.', child: const FilledButton.icon(onPressed: null, icon: Icon(Icons.flash_on_outlined), label: Text('Flash New U-Link'))),
+          Tooltip(message: 'Waiting for the backend stock-to-company assignment operation.', child: FilledButton.icon(onPressed: null, icon: const Icon(Icons.flash_on_outlined), label: const Text('Flash New U-Link'))),
           const SizedBox(height: 8),
           const Text('Waiting for the backend stock-to-company assignment operation.', textAlign: TextAlign.center),
         ],
@@ -128,7 +128,7 @@ class ApiCompanyAdminDashboardScreen extends StatelessWidget {
   final UlinkApiRepository repository;
   final UlinkLoginPreferences? loginPreferences;
   @override
-  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Company Admin dashboard'), actions: [IconButton(onPressed: () async { await repository.logout(); if (context.mounted) Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute<void>(builder: (_) => const UlinkLoginScreen()), (route) => route.isFirst); }, icon: const Icon(Icons.logout), tooltip: 'Log out')]), body: ListView(padding: const EdgeInsets.all(16), children: [Text('U-Links', style: Theme.of(context).textTheme.titleLarge), const SizedBox(height: 8), if (login.ulinks.isEmpty) const _Empty('No U-Links were returned for this account.'), ...login.ulinks.map((ulink) => Card(child: _UlinkTile(ulink: ulink))), const SizedBox(height: 16), const Text('A CompanyID is required before devices can be loaded. The current API Login response does not provide one.'),]));
+  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Company Admin dashboard'), actions: [IconButton(onPressed: () async { await repository.logout(); if (context.mounted) Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute<void>(builder: (_) => const UlinkLoginScreen()), (route) => route.isFirst); }, icon: const Icon(Icons.logout), tooltip: 'Log out')]), body: ListView(padding: const EdgeInsets.all(16), children: [Text('U-Links', style: Theme.of(context).textTheme.titleLarge), const SizedBox(height: 8), if (login.ulinks.isEmpty) const _Empty('No U-Links were returned for this account.'), ...login.ulinks.map((ulink) => Card(child: _UlinkTile(ulink: ulink))), const SizedBox(height: 16), const Text('Device provisioning is restricted to an authorized CompanyID. The current API Login response does not provide CompanyID, so GetDevices and device provisioning remain disabled.'), const SizedBox(height: 8), const Text('U-Link reset is disabled until the destructive confirmation and fresh-password flow is completed.'),]));
 }
 
 class _UlinkTile extends StatelessWidget {
@@ -140,5 +140,15 @@ class _Empty extends StatelessWidget { const _Empty(this.text); final String tex
 class _Retry extends StatelessWidget { const _Retry({required this.error, required this.onRetry}); final String error; final VoidCallback onRetry; @override Widget build(BuildContext context) => Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Text(error, textAlign: TextAlign.center), const SizedBox(height: 12), OutlinedButton(onPressed: onRetry, child: const Text('Retry'))])); }
 String _companyMeta(ApiCompany company) => [if (company.uCount != null) '${company.uCount} U-Links', if (company.cia != null) 'Active: ${_yesNo(company.cia)}'].join(' • ');
 String _yesNo(bool? value) => value == null ? 'Unknown' : value ? 'Yes' : 'No';
-String _friendly(Object? error) => error is UlinkApiException ? error.message : 'The service is unavailable. Please try again.';
+String _friendly(Object? error) {
+  if (error is! UlinkApiException) return 'The service is unavailable. Please check your connection and try again.';
+  return switch (error.statusCode) {
+    401 => 'Your API session has expired. Sign in again.',
+    403 => 'You do not have permission to view this data.',
+    404 => 'The requested U-Link data was not found.',
+    429 => 'Too many requests. Please wait and try again.',
+    503 => 'The API service is temporarily unavailable.',
+    _ => error.message,
+  };
+}
 Future<String?> _askForPassword(BuildContext context) async { final controller = TextEditingController(); return showDialog<String>(context: context, builder: (context) => AlertDialog(title: const Text('Refresh session data'), content: TextField(controller: controller, obscureText: true, autofocus: true, decoration: const InputDecoration(labelText: 'Password')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Refresh'))])); }
