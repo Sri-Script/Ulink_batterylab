@@ -4,39 +4,39 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// Passwords are intentionally not accepted or stored by this API.
 abstract class UlinkLoginPreferences {
-  Future<String?> readEmail();
-  Future<void> saveEmail(String email);
-  Future<void> clearEmail();
+  Future<String?> readUsername();
+  Future<void> saveUsername(String username);
+  Future<void> clearUsername();
 }
 
 class SharedPreferencesUlinkLoginPreferences implements UlinkLoginPreferences {
-  static const emailKey = 'ulink_saved_email';
+  static const usernameKey = 'ulink_saved_username';
 
   @override
-  Future<String?> readEmail() async {
+  Future<String?> readUsername() async {
     final preferences = await SharedPreferences.getInstance();
-    return _normalize(preferences.getString(emailKey));
+    return _normalize(preferences.getString(usernameKey));
   }
 
   @override
-  Future<void> saveEmail(String email) async {
+  Future<void> saveUsername(String username) async {
     final preferences = await SharedPreferences.getInstance();
-    final normalized = _normalize(email);
+    final normalized = _normalize(username);
     if (normalized == null) {
-      await preferences.remove(emailKey);
+      await preferences.remove(usernameKey);
     } else {
-      await preferences.setString(emailKey, normalized);
+      await preferences.setString(usernameKey, normalized);
     }
   }
 
   @override
-  Future<void> clearEmail() async {
+  Future<void> clearUsername() async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.remove(emailKey);
+    await preferences.remove(usernameKey);
   }
 
-  static String? _normalize(String? email) {
-    final normalized = email?.trim().toLowerCase() ?? '';
+  static String? _normalize(String? username) {
+    final normalized = username?.trim() ?? '';
     return normalized.isEmpty ? null : normalized;
   }
 }

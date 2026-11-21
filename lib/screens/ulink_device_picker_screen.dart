@@ -2,13 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
 
 import '../services/permission_service.dart';
 import '../services/ulink_ble_protocol_config.dart';
 import '../services/ulink_ble_provisioning_client.dart';
 import '../services/ulink_login_preferences.dart';
+import '../services/ulink_api_repository.dart';
 import 'ulink_login_screen.dart';
 import 'ulink_wifi_provisioning_screen.dart';
 
@@ -178,9 +177,9 @@ class _UlinkDevicePickerScreenState extends State<UlinkDevicePickerScreen> {
       try {
         await (widget.loginPreferences ??
                 SharedPreferencesUlinkLoginPreferences())
-            .clearEmail();
+            .clearUsername();
       } finally {
-        if (Firebase.apps.isNotEmpty) await FirebaseAuth.instance.signOut();
+        await UlinkApiRepository().logout();
       }
       if (!mounted) return;
       await Navigator.of(context).pushAndRemoveUntil(
@@ -310,9 +309,9 @@ class UlinkLogoutButton extends StatelessWidget {
     try {
       try {
         await (loginPreferences ?? SharedPreferencesUlinkLoginPreferences())
-            .clearEmail();
+            .clearUsername();
       } finally {
-        if (Firebase.apps.isNotEmpty) await FirebaseAuth.instance.signOut();
+        await UlinkApiRepository().logout();
       }
       if (context.mounted) {
         await Navigator.of(context).pushAndRemoveUntil(
