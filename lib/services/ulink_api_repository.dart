@@ -57,6 +57,19 @@ class UlinkApiRepository {
   Future<ApiSession?> restoreSession() async =>
       _session ??= await _store.read();
 
+  /// Resolves (and, when necessary, refreshes) the current authenticated
+  /// session without exposing tokens to workflow UI code.
+  Future<ApiSession> requireActiveSession() => _validSession();
+
+  /// A safe authenticated read used before an irreversible U-Link firmware
+  /// action. A successful response proves both session validity and API reachability.
+  Future<void> verifyUlinkApiReachability({
+    required String userId,
+    required String companyId,
+  }) async {
+    await getCompanyUlinks(userId: userId, companyId: companyId);
+  }
+
   Future<ApiLoginResult> login({
     required String username,
     required String password,
@@ -115,7 +128,9 @@ class UlinkApiRepository {
     } finally {
       await clearSession();
     }
-    return confirmed ? ApiLogoutResult.serverConfirmed : ApiLogoutResult.localOnly;
+    return confirmed
+        ? ApiLogoutResult.serverConfirmed
+        : ApiLogoutResult.localOnly;
   }
 
   Future<void> clearSession() async {
@@ -137,8 +152,21 @@ class UlinkApiRepository {
       ulinkId: ulinkId,
       isFlashed: flashed ? 1 : 0,
     );
-    await _sendProvisioning(session, request, idempotencyKey: idempotencyKey);
-    return getCompanyUlinks(userId: session.userId, companyId: companyId);
+    // Keep the exact operation persisted until the required post-write list
+    // refresh succeeds. If that response is lost, the same PUT can still be
+    // retried idempotently rather than risking a second operation.
+    await _sendProvisioning(
+      session,
+      request,
+      idempotencyKey: idempotencyKey,
+      clearPendingOnSuccess: false,
+    );
+    final ulinks = await getCompanyUlinks(
+      userId: session.userId,
+      companyId: companyId,
+    );
+    await _store.clearPending();
+    return ulinks;
   }
 
   Future<void> updateDeviceProvisioning({
@@ -149,7 +177,9 @@ class UlinkApiRepository {
   }) async {
     final session = await _validSession();
     if (session.userRole != 'CA') {
-      throw const UlinkApiException('Only Company Admin users can provision devices.');
+      throw const UlinkApiException(
+        'Only Company Admin users can provision devices.',
+      );
     }
     final request = ApiProvisioningRequest(
       kind: ApiProvisioningKind.device,
@@ -167,8 +197,10 @@ class UlinkApiRepository {
   Future<bool> retryPendingProvisioning() async {
     final pending = await _store.readPending();
     final session = await restoreSession();
-    if (pending == null || session == null ||
-        pending.userId != session.userId || pending.userRole != session.userRole) {
+    if (pending == null ||
+        session == null ||
+        pending.userId != session.userId ||
+        pending.userRole != session.userRole) {
       return false;
     }
     final validSession = await _validSession();
@@ -193,6 +225,7 @@ class UlinkApiRepository {
     ApiSession session,
     ApiProvisioningRequest request, {
     String? idempotencyKey,
+    bool clearPendingOnSuccess = true,
   }) async {
     final key = idempotencyKey ?? _newUuid();
     final endpoint = request.kind == ApiProvisioningKind.ulink
@@ -222,11 +255,19 @@ class UlinkApiRepository {
       final json = _decode(response);
       if (response.statusCode != 200) _throwServer(json, response.statusCode);
       _requireSuccess(json, statusCode: response.statusCode);
-      await _store.clearPending();
-    } catch (_) {
+      if (clearPendingOnSuccess) {
+        await _store.clearPending();
+      }
+    } on UlinkApiException {
       // Keep the exact pending body/key so the caller can explicitly retry an
       // unknown result with the same operation identity and session.
       rethrow;
+    } on Exception {
+      // Keep the exact pending body/key so a lost response can be retried with
+      // the same idempotency key instead of creating a second assignment.
+      throw const UlinkApiException(
+        'The server response was lost. Retrying the same assignment.',
+      );
     }
   }
 
@@ -269,8 +310,9 @@ class UlinkApiRepository {
 
   Future<ApiSession> _validSession() async {
     final session = await restoreSession();
-    if (session == null)
+    if (session == null) {
       throw const UlinkApiException('Your session has ended. Sign in again.');
+    }
     if (session.accessTokenExpiresAtUtc.isBefore(
       _now().toUtc().add(const Duration(seconds: 30)),
     )) {
@@ -302,16 +344,18 @@ class UlinkApiRepository {
         },
         body: jsonEncode(<String, String>{'RefreshToken': old.refreshToken}),
       );
-      if (response.statusCode != 200)
+      if (response.statusCode != 200) {
         throw UlinkApiException(
           'Your session has ended. Sign in again.',
           statusCode: response.statusCode,
         );
+      }
       final json = _decode(response);
       _requireSuccess(json, statusCode: response.statusCode);
       final tokens = json['Tokens'];
-      if (tokens is! Map)
+      if (tokens is! Map) {
         throw const FormatException('Refresh response did not contain tokens.');
+      }
       final refreshed = old.withTokens(Map<String, dynamic>.from(tokens));
       await _store.save(refreshed); // write the replacement tokens together.
       _session = refreshed;
@@ -365,12 +409,7 @@ String _newUuid() {
 /// Public client name used by integrations that do not need repository
 /// terminology. It deliberately exposes the same read-only API surface.
 class UlinkApiClient extends UlinkApiRepository {
-  UlinkApiClient({
-    super.client,
-    super.sessionStore,
-    super.baseUrl,
-    super.now,
-  });
+  UlinkApiClient({super.client, super.sessionStore, super.baseUrl, super.now});
 }
 
 JsonMap _decode(http.Response response) {
@@ -401,7 +440,7 @@ Never _throwServer(JsonMap json, int? statusCode) {
 
 List<T> _list<T>(JsonMap json, String key, T Function(JsonMap) convert) {
   final value = json[key];
-    if (value is! List) return <T>[];
+  if (value is! List) return <T>[];
   return value
       .whereType<Map>()
       .map((item) => convert(Map<String, dynamic>.from(item)))

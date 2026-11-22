@@ -1,7 +1,7 @@
 /// Immutable U-Link provisioning values supplied at build/run time.
 ///
-/// Rev4 values are deployed production defaults. Dart defines may override
-/// them for later hardware revisions, but blank values never disable Rev4.
+/// Rev5 production BLE values. The factory advertised name is exactly ULINK;
+/// assigned-name matching is handled by the flash workflow, not a prefix.
 class UlinkBleProtocolConfig {
   const UlinkBleProtocolConfig({
     required this.namePrefix,
