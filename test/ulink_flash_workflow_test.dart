@@ -10,6 +10,45 @@ import 'package:ulink_batterylab/services/ulink_flash_workflow.dart';
 void main() {
   const serviceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 
+  test('each flash stage maps to a safe user-facing failure message', () {
+    expect(
+      UlinkFlashStage.checkingApiConnection.failureMessage,
+      'Flashing stopped while checking the API connection.',
+    );
+    expect(
+      UlinkFlashStage.lookingForFactoryUlink.failureMessage,
+      'Flashing stopped while looking for the factory U-Link.',
+    );
+    expect(
+      UlinkFlashStage.connectingSecurely.failureMessage,
+      'Flashing stopped while connecting to the U-Link.',
+    );
+    expect(
+      UlinkFlashStage.preparingUlink.failureMessage,
+      'Flashing stopped while preparing the U-Link.',
+    );
+    expect(
+      UlinkFlashStage.writingUcode.failureMessage,
+      'Flashing stopped while waiting for the UCode acknowledgement.',
+    );
+    expect(
+      UlinkFlashStage.waitingForRestart.failureMessage,
+      'Flashing stopped while waiting for the U-Link to restart.',
+    );
+    expect(
+      UlinkFlashStage.verifyingAssignedUlink.failureMessage,
+      'Flashing stopped while verifying the assigned U-Link.',
+    );
+    expect(
+      UlinkFlashStage.updatingServerAssignment.failureMessage,
+      'Flashing stopped while updating the server assignment.',
+    );
+    expect(
+      UlinkFlashStage.completed.failureMessage,
+      'Flashing stopped before completion.',
+    );
+  });
+
   test('factory matching accepts only the exact factory name', () {
     final nonFactoryName = <String>['RAW', 'ULINK'].join();
     expect(UlinkAdvertisementMatcher.isFactoryName('ULINK'), isTrue);
@@ -140,6 +179,41 @@ void main() {
   );
 
   test(
+    'preflight failure stops at checkingApiConnection before BLE work',
+    () async {
+      final log = <String>[];
+      final stages = <UlinkFlashStage>[];
+      final ble = _FakeBle(log);
+
+      await expectLater(
+        UlinkFlashWorkflow(
+          ble: ble,
+          api: _PreflightFailingApi(),
+        ).run(_selection(), onProgress: stages.add),
+        throwsA(
+          isA<UlinkFlashException>()
+              .having(
+                (error) => error.stage,
+                'stage',
+                UlinkFlashStage.checkingApiConnection,
+              )
+              .having(
+                (error) => error.message,
+                'message',
+                'Flashing stopped while checking the API connection.',
+              ),
+        ),
+      );
+
+      expect(stages, [UlinkFlashStage.checkingApiConnection]);
+      expect(log, isNot(contains('ble-factory')));
+      expect(log, isNot(contains('ble-connect')));
+      expect(log, isNot(contains('ble-prepare')));
+      expect(log, isNot(contains('ble-write')));
+    },
+  );
+
+  test(
     'lost assignment response retries the same pending operation once',
     () async {
       final log = <String>[];
@@ -247,6 +321,21 @@ class _FakeApi implements UlinkFlashApiGateway {
       ),
     ];
   }
+}
+
+class _PreflightFailingApi implements UlinkFlashApiGateway {
+  @override
+  Future<void> verifyPrerequisites(UlinkFlashSelection selection) =>
+      Future<void>.error(FormatException('unexpected API response'));
+
+  @override
+  Future<List<ApiUlink>> retryPendingAssignment(
+    UlinkFlashSelection selection,
+  ) => Future<List<ApiUlink>>.error(UnimplementedError());
+
+  @override
+  Future<List<ApiUlink>> updateAssignment(UlinkFlashSelection selection) =>
+      Future<List<ApiUlink>>.error(UnimplementedError());
 }
 
 class _FakeSettingsClient implements UlinkSettingsClient {

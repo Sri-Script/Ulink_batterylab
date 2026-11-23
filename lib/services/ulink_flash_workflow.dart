@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../models/ulink_api_models.dart';
@@ -7,6 +8,7 @@ import 'permission_service.dart';
 import 'ulink_api_repository.dart';
 import 'ulink_ble_protocol_config.dart';
 import 'ulink_ble_provisioning_client.dart';
+import 'ulink_flash_diagnostics.dart';
 
 enum UlinkFlashStage {
   checkingApiConnection,
@@ -32,6 +34,26 @@ extension UlinkFlashStageText on UlinkFlashStage {
     UlinkFlashStage.updatingServerAssignment => 'Updating server assignment',
     UlinkFlashStage.completed => 'Completed',
   };
+
+  String get failureMessage => switch (this) {
+    UlinkFlashStage.checkingApiConnection =>
+      'Flashing stopped while checking the API connection.',
+    UlinkFlashStage.lookingForFactoryUlink =>
+      'Flashing stopped while looking for the factory U-Link.',
+    UlinkFlashStage.connectingSecurely =>
+      'Flashing stopped while connecting to the U-Link.',
+    UlinkFlashStage.preparingUlink =>
+      'Flashing stopped while preparing the U-Link.',
+    UlinkFlashStage.writingUcode =>
+      'Flashing stopped while waiting for the UCode acknowledgement.',
+    UlinkFlashStage.waitingForRestart =>
+      'Flashing stopped while waiting for the U-Link to restart.',
+    UlinkFlashStage.verifyingAssignedUlink =>
+      'Flashing stopped while verifying the assigned U-Link.',
+    UlinkFlashStage.updatingServerAssignment =>
+      'Flashing stopped while updating the server assignment.',
+    UlinkFlashStage.completed => 'Flashing stopped before completion.',
+  };
 }
 
 class UlinkFlashSelection {
@@ -49,9 +71,24 @@ class UlinkFlashSelection {
 }
 
 class UlinkFlashException implements Exception {
-  const UlinkFlashException(this.message, {this.manualRecovery = false});
+  const UlinkFlashException(
+    this.message, {
+    this.manualRecovery = false,
+    this.stage,
+  });
+
+  factory UlinkFlashException.forStage(
+    UlinkFlashStage stage, {
+    bool manualRecovery = false,
+  }) => UlinkFlashException(
+    stage.failureMessage,
+    manualRecovery: manualRecovery,
+    stage: stage,
+  );
+
   final String message;
   final bool manualRecovery;
+  final UlinkFlashStage? stage;
   @override
   String toString() => message;
 }
@@ -102,9 +139,18 @@ abstract class UlinkFlashApiGateway {
   Future<List<ApiUlink>> retryPendingAssignment(UlinkFlashSelection selection);
 }
 
-class UlinkRepositoryFlashGateway implements UlinkFlashApiGateway {
+class UlinkRepositoryFlashGateway
+    implements UlinkFlashApiGateway, UlinkFlashApiDiagnosticSource {
   UlinkRepositoryFlashGateway(this.repository);
   final UlinkApiRepository repository;
+  String _assignmentHttpStatus = 'not attempted';
+  String _assignmentResult = 'not attempted';
+
+  @override
+  UlinkFlashApiDiagnostics get flashDiagnostics => UlinkFlashApiDiagnostics(
+    assignmentHttpStatus: _assignmentHttpStatus,
+    assignmentResult: _assignmentResult,
+  );
 
   @override
   Future<void> verifyPrerequisites(UlinkFlashSelection selection) async {
@@ -133,29 +179,69 @@ class UlinkRepositoryFlashGateway implements UlinkFlashApiGateway {
   }
 
   @override
-  Future<List<ApiUlink>> updateAssignment(UlinkFlashSelection selection) =>
-      repository.updateUlinkProvisioning(
+  Future<List<ApiUlink>> updateAssignment(UlinkFlashSelection selection) async {
+    _assignmentHttpStatus = 'pending';
+    _assignmentResult = 'pending';
+    try {
+      final ulinks = await repository.updateUlinkProvisioning(
         companyId: selection.company.cid,
         ulinkId: selection.stockUlink.uid,
         flashed: true,
       );
+      _assignmentHttpStatus = '200';
+      _assignmentResult = 'success';
+      return ulinks;
+    } on UlinkApiException catch (error) {
+      _assignmentHttpStatus = error.statusCode?.toString() ?? 'unavailable';
+      _assignmentResult = _apiResultCategory(error);
+      rethrow;
+    } catch (_) {
+      _assignmentHttpStatus = 'unavailable';
+      _assignmentResult = 'transport failure';
+      rethrow;
+    }
+  }
 
   @override
   Future<List<ApiUlink>> retryPendingAssignment(
     UlinkFlashSelection selection,
   ) async {
-    final retried = await repository.retryPendingProvisioning();
-    if (!retried) {
-      throw const UlinkFlashException(
-        'The server assignment is still pending. Keep the U-Link powered and retry the pending operation from this session.',
-        manualRecovery: true,
+    _assignmentHttpStatus = 'pending retry';
+    _assignmentResult = 'retry pending';
+    try {
+      final retried = await repository.retryPendingProvisioning();
+      if (!retried) {
+        _assignmentHttpStatus = 'unavailable';
+        _assignmentResult = 'pending operation unavailable';
+        throw const UlinkFlashException(
+          'The server assignment is still pending. Keep the U-Link powered and retry the pending operation from this session.',
+          manualRecovery: true,
+        );
+      }
+      final ulinks = await repository.getCompanyUlinks(
+        userId: selection.session.userId,
+        companyId: selection.company.cid,
       );
+      _assignmentHttpStatus = '200';
+      _assignmentResult = 'retry success';
+      return ulinks;
+    } on UlinkApiException catch (error) {
+      _assignmentHttpStatus = error.statusCode?.toString() ?? 'unavailable';
+      _assignmentResult = _apiResultCategory(error);
+      rethrow;
+    } catch (_) {
+      _assignmentHttpStatus = 'unavailable';
+      _assignmentResult = 'transport failure';
+      rethrow;
     }
-    return repository.getCompanyUlinks(
-      userId: selection.session.userId,
-      companyId: selection.company.cid,
-    );
   }
+}
+
+String _apiResultCategory(UlinkApiException error) {
+  if (error.message.toLowerCase().contains('invalid response')) {
+    return 'parse failure';
+  }
+  return error.statusCode == null ? 'transport failure' : 'HTTP failure';
 }
 
 /// Coordinates the irreversible Rev5 sequence. It never retries SET_UCODE and
@@ -177,76 +263,117 @@ class UlinkFlashWorkflow {
   }) async {
     var positiveAck = false;
     var assignedVerified = false;
+    var currentStage = UlinkFlashStage.checkingApiConnection;
+
+    void beginStage(UlinkFlashStage stage) {
+      currentStage = stage;
+      onProgress(stage);
+      _debugStage(selection, stage);
+    }
+
+    void completeStage(UlinkFlashStage stage) => _debugStage(selection, stage);
+
     try {
-      onProgress(UlinkFlashStage.checkingApiConnection);
+      beginStage(UlinkFlashStage.checkingApiConnection);
       await _api.verifyPrerequisites(selection);
+      completeStage(UlinkFlashStage.checkingApiConnection);
 
-      onProgress(UlinkFlashStage.lookingForFactoryUlink);
+      beginStage(UlinkFlashStage.lookingForFactoryUlink);
       await _ble.findFactory();
-      onProgress(UlinkFlashStage.connectingSecurely);
+      completeStage(UlinkFlashStage.lookingForFactoryUlink);
+      beginStage(UlinkFlashStage.connectingSecurely);
       await _ble.connectFactory();
-      onProgress(UlinkFlashStage.preparingUlink);
+      completeStage(UlinkFlashStage.connectingSecurely);
+      beginStage(UlinkFlashStage.preparingUlink);
       await _ble.prepare();
+      completeStage(UlinkFlashStage.preparingUlink);
 
-      onProgress(UlinkFlashStage.writingUcode);
+      beginStage(UlinkFlashStage.writingUcode);
       try {
         await _ble.writeUcode(selection.ucode);
         positiveAck = true;
-      } catch (_) {
+        completeStage(UlinkFlashStage.writingUcode);
+      } catch (error, stackTrace) {
+        _debugStage(
+          selection,
+          UlinkFlashStage.writingUcode,
+          error: error,
+          stackTrace: stackTrace,
+        );
         // A write may have reached a write-once device even if the response
         // was lost. Scan to reconcile, but never resend the command.
       }
 
-      onProgress(UlinkFlashStage.waitingForRestart);
+      beginStage(UlinkFlashStage.waitingForRestart);
       try {
         await _ble.waitForRestart();
-      } catch (_) {
+        completeStage(UlinkFlashStage.waitingForRestart);
+      } catch (error, stackTrace) {
+        _debugStage(
+          selection,
+          UlinkFlashStage.waitingForRestart,
+          error: error,
+          stackTrace: stackTrace,
+        );
         // The reboot disconnect can be missed by Android; verification below
         // is the authoritative post-write result.
       }
       // Release the factory link before the one-connection device advertises
       // again. This is not a firmware reset and never sends a BLE command.
       await _ble.disconnect();
-      onProgress(UlinkFlashStage.verifyingAssignedUlink);
+      beginStage(UlinkFlashStage.verifyingAssignedUlink);
       try {
         await _ble.verifyAssigned(selection.ucode);
         assignedVerified = true;
-      } catch (_) {
-        if (positiveAck) {
-          throw const UlinkFlashException(
-            'UCode may have been written; do not retry. Reconnect and verify manually.',
-            manualRecovery: true,
-          );
-        }
-        throw const UlinkFlashException(
-          'UCode may have been written; do not retry. Reconnect and verify manually.',
+        completeStage(UlinkFlashStage.verifyingAssignedUlink);
+      } catch (error, stackTrace) {
+        _debugStage(
+          selection,
+          UlinkFlashStage.verifyingAssignedUlink,
+          error: error,
+          stackTrace: stackTrace,
+        );
+        throw UlinkFlashException.forStage(
+          UlinkFlashStage.verifyingAssignedUlink,
           manualRecovery: true,
         );
       }
 
       if (!positiveAck) {
-        throw const UlinkFlashException(
-          'The U-Link advertised with the selected UCode, but its write acknowledgement was not received. Do not retry; it needs manual recovery.',
+        throw UlinkFlashException.forStage(
+          UlinkFlashStage.writingUcode,
           manualRecovery: true,
         );
       }
 
-      onProgress(UlinkFlashStage.updatingServerAssignment);
+      beginStage(UlinkFlashStage.updatingServerAssignment);
       List<ApiUlink> companyUlinks;
       try {
         companyUlinks = await _api.updateAssignment(selection);
-      } on UlinkApiException catch (error) {
+      } on UlinkApiException catch (error, stackTrace) {
+        _debugStage(
+          selection,
+          UlinkFlashStage.updatingServerAssignment,
+          error: error,
+          stackTrace: stackTrace,
+        );
         if (error.statusCode != null) {
-          throw UlinkFlashException(
-            '${error.message} U-Link needs manual recovery.',
+          throw UlinkFlashException.forStage(
+            UlinkFlashStage.updatingServerAssignment,
             manualRecovery: true,
           );
         }
         try {
           companyUlinks = await _api.retryPendingAssignment(selection);
-        } catch (_) {
-          throw const UlinkFlashException(
-            'The U-Link is verified, but the server assignment outcome is unknown. The pending operation was retained and must be retried idempotently; do not reset the U-Link.',
+        } catch (retryError, stackTrace) {
+          _debugStage(
+            selection,
+            UlinkFlashStage.updatingServerAssignment,
+            error: retryError,
+            stackTrace: stackTrace,
+          );
+          throw UlinkFlashException.forStage(
+            UlinkFlashStage.updatingServerAssignment,
             manualRecovery: true,
           );
         }
@@ -255,26 +382,121 @@ class UlinkFlashWorkflow {
         (ulink) => ulink.uCode == selection.ucode && ulink.uif == true,
       );
       if (!confirmed) {
-        throw const UlinkFlashException(
-          'The server did not confirm the flashed UCode. U-Link needs manual recovery.',
+        throw UlinkFlashException.forStage(
+          UlinkFlashStage.updatingServerAssignment,
           manualRecovery: true,
         );
       }
+      completeStage(UlinkFlashStage.updatingServerAssignment);
       final settingsClient = await _ble.reconnectForSettings();
-      onProgress(UlinkFlashStage.completed);
+      beginStage(UlinkFlashStage.completed);
+      completeStage(UlinkFlashStage.completed);
       return UlinkFlashResult(
         settingsClient: settingsClient,
         companyUlinks: companyUlinks,
       );
+    } on UlinkFlashException catch (error, stackTrace) {
+      if (error.stage != null) rethrow;
+      _debugStage(
+        selection,
+        currentStage,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      throw UlinkFlashException.forStage(
+        currentStage,
+        manualRecovery: error.manualRecovery,
+      );
+    } catch (error, stackTrace) {
+      _debugStage(
+        selection,
+        currentStage,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      throw UlinkFlashException.forStage(currentStage);
     } finally {
       // The gateway retains only the new assigned settings client after a
       // confirmed end-to-end success. All other paths release the old link.
       if (!positiveAck || !assignedVerified) await _ble.disconnect();
     }
   }
+
+  void _debugStage(
+    UlinkFlashSelection selection,
+    UlinkFlashStage stage, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    final ble = _ble is UlinkFlashBleDiagnosticSource
+        ? (_ble as UlinkFlashBleDiagnosticSource).flashDiagnostics
+        : const UlinkFlashBleDiagnostics();
+    final api = _api is UlinkFlashApiDiagnosticSource
+        ? (_api as UlinkFlashApiDiagnosticSource).flashDiagnostics
+        : const UlinkFlashApiDiagnostics();
+    final detail = error == null
+        ? ''
+        : '; cause=${_redactDiagnosticCause(error)}';
+    final stackDetail = kDebugMode && stackTrace != null
+        ? '; stack=${_topStackLocation(stackTrace)}'
+        : '';
+    debugPrint(
+      '[U-Link Flash] cid=${selection.company.cid}; '
+      'stockUid=${selection.stockUlink.uid}; ucode=${selection.ucode}; '
+      'stage=${stage.name}; advertisementName=${ble.advertisementName}; '
+      'serviceUuidMatch=${ble.serviceUuidMatch}; connection=${ble.connection}; '
+      'discovery=${ble.discovery}; notifications=${ble.notifications}; '
+      'DEV_OPEN=${ble.developerOpen}; settingsAck=${ble.settingsAck}; '
+      'SET_UCODE write=${ble.setUcodeWrite}; '
+      'response=${ble.responseCategory}; '
+      'assignedAdvertisementVerification=${ble.assignedAdvertisementVerification}; '
+      'apiAssignmentHttpStatus=${api.assignmentHttpStatus}; '
+      'apiAssignmentResult=${api.assignmentResult}$detail$stackDetail',
+    );
+  }
 }
 
-class FlutterUlinkFlashBleGateway implements UlinkFlashBleGateway {
+String _redactDiagnosticCause(Object error) {
+  // Never serialize an exception message: platform and HTTP exceptions may
+  // embed a MAC address, credentials, headers, or complete response body.
+  // The stage snapshot above contains every diagnostic detail that is safe to
+  // expose, including whitelisted ACK error codes and HTTP status/category.
+  return switch (error) {
+    UlinkApiException(statusCode: final statusCode) =>
+      'API ${_safeApiFailureCategory(error.message)} status=${statusCode ?? 'unavailable'}',
+    UlinkSettingsException() => 'BLE protocol failure',
+    UlinkFlashException() => 'flash workflow failure',
+    FormatException() => 'response format failure',
+    TypeError() => 'unexpected response type',
+    _ => 'failure type=${error.runtimeType}',
+  };
+}
+
+String _safeApiFailureCategory(String message) {
+  final normalized = message.toLowerCase();
+  if (normalized.contains('invalid') || normalized.contains('unexpected')) {
+    return 'invalid response';
+  }
+  if (normalized.contains('network') ||
+      normalized.contains('unavailable') ||
+      normalized.contains('lost')) {
+    return 'network failure';
+  }
+  if (normalized.contains('session')) return 'session failure';
+  return 'request failure';
+}
+
+String _topStackLocation(StackTrace stackTrace) {
+  final lines = stackTrace.toString().split('\n');
+  final location = lines.firstWhere(
+    (line) => line.trim().isNotEmpty,
+    orElse: () => 'unavailable',
+  );
+  return location.length <= 200 ? location : '${location.substring(0, 200)}…';
+}
+
+class FlutterUlinkFlashBleGateway
+    implements UlinkFlashBleGateway, UlinkFlashBleDiagnosticSource {
   FlutterUlinkFlashBleGateway({
     UlinkBleProtocolConfig? config,
     this.scanTimeout = const Duration(seconds: 20),
@@ -285,6 +507,27 @@ class FlutterUlinkFlashBleGateway implements UlinkFlashBleGateway {
   ScanResult? _factory;
   ScanResult? _assigned;
   UlinkBleProvisioningClient? _flashClient;
+  UlinkFlashBleDiagnostics? _lastClientDiagnostics;
+  String _advertisementName = 'not observed';
+  String _serviceUuidMatch = 'not observed';
+  String _assignedAdvertisementVerification = 'not attempted';
+
+  @override
+  UlinkFlashBleDiagnostics get flashDiagnostics {
+    final client = _flashClient?.flashDiagnostics ?? _lastClientDiagnostics;
+    return UlinkFlashBleDiagnostics(
+      advertisementName: _advertisementName,
+      serviceUuidMatch: _serviceUuidMatch,
+      connection: client?.connection ?? 'not attempted',
+      discovery: client?.discovery ?? 'not attempted',
+      notifications: client?.notifications ?? 'not attempted',
+      developerOpen: client?.developerOpen ?? 'not attempted',
+      settingsAck: client?.settingsAck ?? 'not attempted',
+      setUcodeWrite: client?.setUcodeWrite ?? 'not sent',
+      responseCategory: client?.responseCategory ?? 'not observed',
+      assignedAdvertisementVerification: _assignedAdvertisementVerification,
+    );
+  }
 
   @override
   Future<void> findFactory() async {
@@ -295,6 +538,7 @@ class FlutterUlinkFlashBleGateway implements UlinkFlashBleGateway {
           ) &&
           _hasConfiguredService(result),
     );
+    _recordAdvertisement(_factory!);
   }
 
   @override
@@ -305,6 +549,7 @@ class FlutterUlinkFlashBleGateway implements UlinkFlashBleGateway {
     }
     final client = UlinkBleProvisioningClient(config: _config);
     _flashClient = client;
+    _lastClientDiagnostics = null;
     await client.connect(result.device);
   }
 
@@ -328,14 +573,22 @@ class FlutterUlinkFlashBleGateway implements UlinkFlashBleGateway {
 
   @override
   Future<void> verifyAssigned(String ucode) async {
-    _assigned = await _scan(
-      (result) =>
-          UlinkAdvertisementMatcher.isAssignedName(
-            result.advertisementData.advName,
-            ucode,
-          ) &&
-          _hasConfiguredService(result),
-    );
+    _assignedAdvertisementVerification = 'searching';
+    try {
+      _assigned = await _scan(
+        (result) =>
+            UlinkAdvertisementMatcher.isAssignedName(
+              result.advertisementData.advName,
+              ucode,
+            ) &&
+            _hasConfiguredService(result),
+      );
+      _recordAdvertisement(_assigned!);
+      _assignedAdvertisementVerification = 'verified';
+    } catch (_) {
+      _assignedAdvertisementVerification = 'not verified';
+      rethrow;
+    }
   }
 
   @override
@@ -351,7 +604,11 @@ class FlutterUlinkFlashBleGateway implements UlinkFlashBleGateway {
 
   @override
   Future<void> disconnect() async {
-    await _flashClient?.disconnect();
+    final client = _flashClient;
+    if (client != null) {
+      await client.disconnect();
+      _lastClientDiagnostics = client.flashDiagnostics;
+    }
     _flashClient = null;
   }
 
@@ -360,6 +617,13 @@ class FlutterUlinkFlashBleGateway implements UlinkFlashBleGateway {
         result.advertisementData.serviceUuids.map((uuid) => uuid.str),
         _config.serviceUuid,
       );
+
+  void _recordAdvertisement(ScanResult result) {
+    _advertisementName = result.advertisementData.advName;
+    _serviceUuidMatch = _hasConfiguredService(result)
+        ? 'matched'
+        : 'not matched';
+  }
 
   Future<ScanResult> _scan(bool Function(ScanResult result) matches) async {
     if (!await PermissionService().requestBle()) {

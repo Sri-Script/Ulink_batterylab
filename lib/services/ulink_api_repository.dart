@@ -67,7 +67,17 @@ class UlinkApiRepository {
     required String userId,
     required String companyId,
   }) async {
-    await getCompanyUlinks(userId: userId, companyId: companyId);
+    try {
+      // A valid but empty list still proves that the selected company's
+      // authenticated GetUlinks endpoint is reachable.
+      await getCompanyUlinks(userId: userId, companyId: companyId);
+    } on UlinkApiException {
+      rethrow;
+    } catch (_) {
+      throw const UlinkApiException(
+        'The API preflight returned an unexpected response.',
+      );
+    }
   }
 
   Future<ApiLoginResult> login({
@@ -95,20 +105,27 @@ class UlinkApiRepository {
   Future<List<ApiUlink>> getCompanyUlinks({
     required String userId,
     required String companyId,
-  }) => _readList('/api/v1/ulinks/GetUlinks', <String, String>{
-    'UserId': userId,
-    'CompanyID': companyId,
-  }, ApiUlink.fromJson);
+  }) => _readList(
+    '/api/v1/ulinks/GetUlinks',
+    <String, String>{'UserId': userId, 'CompanyID': companyId},
+    'Ulinks',
+    ApiUlink.fromJson,
+  );
 
   Future<List<ApiDevice>> getDevices({
     required String userId,
     required String companyId,
     required String ulinkId,
-  }) => _readList('/api/v1/devices/GetDevices', <String, String>{
-    'UserId': userId,
-    'CompanyID': companyId,
-    'UlinkID': ulinkId,
-  }, ApiDevice.fromJson);
+  }) => _readList(
+    '/api/v1/devices/GetDevices',
+    <String, String>{
+      'UserId': userId,
+      'CompanyID': companyId,
+      'UlinkID': ulinkId,
+    },
+    'Devices',
+    ApiDevice.fromJson,
+  );
 
   Future<ApiLogoutResult> logout() async {
     final session = await restoreSession();
@@ -274,19 +291,35 @@ class UlinkApiRepository {
   Future<List<T>> _readList<T>(
     String path,
     Map<String, String> query,
+    String listKey,
     T Function(JsonMap) convert,
   ) async {
-    final response = await _authenticatedGet(path, query);
-    final json = _decode(response);
-    _requireSuccess(json, statusCode: response.statusCode);
-    final data = json['Data'];
-    final list = data is List
-        ? data
-        : (json['Result'] is List ? json['Result'] : const <dynamic>[]);
-    return list
-        .whereType<Map>()
-        .map((item) => convert(Map<String, dynamic>.from(item)))
-        .toList();
+    int? statusCode;
+    try {
+      final response = await _authenticatedGet(path, query);
+      statusCode = response.statusCode;
+      final json = _decode(response);
+      if (response.statusCode != 200) {
+        _throwServer(json, response.statusCode);
+      }
+      _requireSuccess(json, statusCode: response.statusCode);
+      final list = _responseList(json, listKey);
+      return list
+          .map((item) => convert(Map<String, dynamic>.from(item)))
+          .toList();
+    } on UlinkApiException {
+      rethrow;
+    } on http.ClientException {
+      throw UlinkApiException(
+        'The API network request failed.',
+        statusCode: statusCode,
+      );
+    } on Object {
+      throw UlinkApiException(
+        'The API returned an invalid $listKey response.',
+        statusCode: statusCode,
+      );
+    }
   }
 
   Future<http.Response> _authenticatedGet(
@@ -450,4 +483,22 @@ List<T> _list<T>(JsonMap json, String key, T Function(JsonMap) convert) {
 JsonMap _payload(JsonMap json) {
   final data = json['Data'];
   return data is Map ? Map<String, dynamic>.from(data) : json;
+}
+
+/// GetUlinks and GetDevices return their documented lists at the response
+/// root. Some deployed API versions wrap the same named list in Data.
+List<JsonMap> _responseList(JsonMap json, String listKey) {
+  final rootValue = json[listKey];
+  final data = json['Data'];
+  final nestedValue = data is Map ? data[listKey] : null;
+  final value = rootValue is List ? rootValue : nestedValue;
+  if (value is! List) {
+    throw const FormatException('The API response did not contain a list.');
+  }
+  return value.map((item) {
+    if (item is! Map) {
+      throw const FormatException('The API list contained an invalid item.');
+    }
+    return Map<String, dynamic>.from(item);
+  }).toList();
 }

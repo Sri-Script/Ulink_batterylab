@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import 'ulink_ble_protocol_config.dart';
+import 'ulink_flash_diagnostics.dart';
 
 enum UlinkSettingsKey { ssid, password, apn, mode }
 
@@ -367,7 +368,8 @@ abstract class UlinkSettingsClient {
 /// GATT client for the Rev5 U-Link NUS service. It preserves the established
 /// Android/Vivo bond attempt and lets the OS complete encrypted Just Works
 /// pairing. Service discovery always completes before notification setup.
-class UlinkBleProvisioningClient implements UlinkSettingsClient {
+class UlinkBleProvisioningClient
+    implements UlinkSettingsClient, UlinkFlashBleDiagnosticSource {
   UlinkBleProvisioningClient({UlinkBleProtocolConfig? config})
     : config = config ?? UlinkBleProtocolConfig.environment;
 
@@ -385,6 +387,24 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
   Completer<UlinkSettings>? _initialSettings;
   Completer<void>? _disconnected;
   Future<void> _writeQueue = Future<void>.value();
+  String _connection = 'not attempted';
+  String _discovery = 'not attempted';
+  String _notifications = 'not attempted';
+  String _developerOpen = 'not attempted';
+  String _settingsAck = 'not attempted';
+  String _setUcodeWrite = 'not sent';
+  String _responseCategory = 'not observed';
+
+  @override
+  UlinkFlashBleDiagnostics get flashDiagnostics => UlinkFlashBleDiagnostics(
+    connection: _connection,
+    discovery: _discovery,
+    notifications: _notifications,
+    developerOpen: _developerOpen,
+    settingsAck: _settingsAck,
+    setUcodeWrite: _setUcodeWrite,
+    responseCategory: _responseCategory,
+  );
 
   @override
   String get deviceName => _device?.platformName.trim().isNotEmpty == true
@@ -407,6 +427,9 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
     _device = device;
     _initialSettings = Completer<UlinkSettings>();
     _disconnected = Completer<void>();
+    _connection = 'attempting';
+    _discovery = 'not attempted';
+    _notifications = 'not attempted';
     try {
       if (Platform.isAndroid) {
         try {
@@ -416,8 +439,10 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
         }
       }
       await device.connect(timeout: const Duration(seconds: 15));
+      _connection = 'connected';
       _connectionSubscription = device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) {
+          _connection = 'disconnected';
           if (!(_disconnected?.isCompleted ?? true)) _disconnected!.complete();
           _failPending('U-Link disconnected before it responded.');
         }
@@ -432,6 +457,7 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
           'Configured U-Link BLE service was not found.',
         );
       }
+      _discovery = 'service found';
       _command = service.characteristics
           .cast<BluetoothCharacteristic?>()
           .firstWhere(
@@ -462,7 +488,11 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
       _responseSubscription = _response!.onValueReceived.listen(_onResponse);
       // Subscribe before the automatic settings frame and before commands.
       await _response!.setNotifyValue(true);
+      _notifications = 'enabled';
     } catch (_) {
+      if (_connection != 'disconnected') _connection = 'failed';
+      if (_discovery == 'not attempted') _discovery = 'failed';
+      if (_notifications == 'not attempted') _notifications = 'failed';
       await disconnect();
       rethrow;
     }
@@ -474,24 +504,50 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
     if (completion == null) {
       throw const UlinkSettingsException('Connect to a U-Link device first.');
     }
-    return completion.future.timeout(
-      config.ackTimeout,
-      onTimeout: () => throw const UlinkSettingsException(
-        'Timed out waiting for the automatic U-Link settings snapshot.',
-      ),
-    );
+    try {
+      final settings = await completion.future.timeout(
+        config.ackTimeout,
+        onTimeout: () => throw const UlinkSettingsException(
+          'Timed out waiting for the automatic U-Link settings snapshot.',
+        ),
+      );
+      return settings;
+    } catch (_) {
+      _recordResponseFailure();
+      rethrow;
+    }
   }
 
-  Future<void> openDeveloperMode() => _writeAndWait<void>(
-    utf8.encode(UlinkSettingsProtocol.developerOpenCommand),
-    UlinkDeveloperModeResponseGate(),
-  );
+  Future<void> openDeveloperMode() async {
+    _developerOpen = 'sent';
+    try {
+      await _writeAndWait<void>(
+        utf8.encode(UlinkSettingsProtocol.developerOpenCommand),
+        UlinkDeveloperModeResponseGate(),
+      );
+      _developerOpen = 'acknowledged';
+    } catch (_) {
+      _developerOpen = 'failed';
+      _recordResponseFailure();
+      rethrow;
+    }
+  }
 
   /// This deliberately has no retry path: Rev5 UCodes are write-once.
-  Future<void> writeUcode(String ucode) => _writeAndWait<void>(
-    utf8.encode(UlinkFlashProtocol.encodeSetUcode(ucode)),
-    UlinkUcodeResponseGate(ucode),
-  );
+  Future<void> writeUcode(String ucode) async {
+    _setUcodeWrite = 'sent';
+    _responseCategory = 'not observed';
+    try {
+      await _writeAndWait<void>(
+        utf8.encode(UlinkFlashProtocol.encodeSetUcode(ucode)),
+        UlinkUcodeResponseGate(ucode),
+      );
+      _responseCategory = 'positive ACK';
+    } catch (_) {
+      _recordResponseFailure();
+      rethrow;
+    }
+  }
 
   Future<void> waitForDisconnect(Duration timeout) {
     final completion = _disconnected;
@@ -561,14 +617,16 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
       if (event is UlinkSettingsEvent) {
         _latestSettings = event.settings;
         // Rev5 requires an acknowledgement after every complete snapshot.
-        unawaited(
-          _enqueueWrite(
-            utf8.encode(UlinkSettingsProtocol.settingsAckCommand),
-          ).catchError((_) {}),
-        );
+        unawaited(_sendSettingsAck());
         if (!(_initialSettings?.isCompleted ?? true)) {
           _initialSettings!.complete(event.settings);
         }
+      }
+      if (event is UlinkErrorEvent) {
+        _responseCategory =
+            'negative ACK error code=${_safeErrorCode(event.message)}';
+      } else if (event is UlinkMalformedEvent) {
+        _responseCategory = 'parse failure';
       }
       _events.add(event);
       _pendingGate?.accept(event);
@@ -577,8 +635,38 @@ class UlinkBleProvisioningClient implements UlinkSettingsClient {
 
   void _failPending(String message) => _pendingGate?.fail(message);
 
+  Future<void> _sendSettingsAck() async {
+    _settingsAck = 'sent';
+    try {
+      await _enqueueWrite(
+        utf8.encode(UlinkSettingsProtocol.settingsAckCommand),
+      );
+      _settingsAck = 'acknowledged';
+    } catch (_) {
+      _settingsAck = 'failed';
+    }
+  }
+
+  void _recordResponseFailure() {
+    if (_responseCategory != 'not observed') return;
+    if (_connection == 'disconnected') {
+      _responseCategory = 'disconnect';
+    } else {
+      _responseCategory = 'timeout';
+    }
+  }
+
+  String _safeErrorCode(String value) {
+    final trimmed = value.trim();
+    if (RegExp(r'^[A-Za-z0-9_-]{1,32}$').hasMatch(trimmed)) {
+      return trimmed;
+    }
+    return 'redacted';
+  }
+
   @override
   Future<void> disconnect() async {
+    _connection = 'disconnected';
     _failPending('U-Link disconnected before it responded.');
     await _responseSubscription?.cancel();
     await _connectionSubscription?.cancel();

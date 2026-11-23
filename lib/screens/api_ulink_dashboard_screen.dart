@@ -185,7 +185,8 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
       if (mounted) {
         setState(
           () => _flashError =
-              'U-Link flashing could not be completed. Do not retry a write-once UCode.',
+              (_flashStage ?? UlinkFlashStage.checkingApiConnection)
+                  .failureMessage,
         );
       }
     } finally {
