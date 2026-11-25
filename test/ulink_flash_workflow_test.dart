@@ -245,6 +245,7 @@ UlinkFlashSelection _selection() => UlinkFlashSelection(
     uCode: 'U20260718220700',
     uif: false,
   ),
+  appType: UlinkAppType.demo,
 );
 
 class _FakeBle implements UlinkFlashBleGateway {

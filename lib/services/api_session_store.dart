@@ -24,6 +24,7 @@ class SecureApiSessionStore implements ApiSessionStore {
   static const _accessExpiry = 'ulink_api_access_expiry_utc';
   static const _refresh = 'ulink_api_refresh_token';
   static const _refreshExpiry = 'ulink_api_refresh_expiry_utc';
+  static const _authenticationId = 'ulink_api_authentication_id';
   static const _pending = 'ulink_api_pending_operation';
   final FlutterSecureStorage _storage;
 
@@ -41,7 +42,7 @@ class SecureApiSessionStore implements ApiSessionStore {
           'RefreshToken': values[_refresh],
           'RefreshTokenExpiresAtUtc': values[_refreshExpiry],
         },
-      );
+      ).withAuthenticationId(values[_authenticationId]);
     } catch (_) {
       await clear();
       return null;
@@ -58,6 +59,8 @@ class SecureApiSessionStore implements ApiSessionStore {
       _accessExpiry: session.accessTokenExpiresAtUtc.toIso8601String(),
       _refresh: session.refreshToken,
       _refreshExpiry: session.refreshTokenExpiresAtUtc.toIso8601String(),
+      if (session.authenticationId != null)
+        _authenticationId: session.authenticationId!,
     };
     for (final entry in values.entries) {
       await _storage.write(key: entry.key, value: entry.value);
@@ -74,6 +77,7 @@ class SecureApiSessionStore implements ApiSessionStore {
       _accessExpiry,
       _refresh,
       _refreshExpiry,
+      _authenticationId,
     ]) {
       await _storage.delete(key: key);
     }
@@ -91,6 +95,8 @@ class SecureApiSessionStore implements ApiSessionStore {
       'userRole': operation.userRole,
       'createdAtUtc': operation.createdAtUtc.toIso8601String(),
       'kind': operation.kind.name,
+      'authenticationId': operation.authenticationId,
+      'requiresFreshAuthentication': operation.requiresFreshAuthentication,
     }),
   );
 
@@ -108,6 +114,9 @@ class SecureApiSessionStore implements ApiSessionStore {
         userRole: json['userRole'] as String,
         createdAtUtc: DateTime.parse(json['createdAtUtc'] as String).toUtc(),
         kind: ApiProvisioningKind.values.byName(json['kind'] as String),
+        authenticationId: json['authenticationId'] as String?,
+        requiresFreshAuthentication:
+            json['requiresFreshAuthentication'] == true,
       );
     } catch (_) {
       await clearPending();
@@ -127,12 +136,14 @@ class MemoryApiSessionStore implements ApiSessionStore {
     value = null;
     pending = null;
   }
+
   @override
   Future<ApiSession?> read() async => value;
   @override
   Future<void> save(ApiSession session) async => value = session;
   @override
-  Future<void> savePending(PendingApiOperation operation) async => pending = operation;
+  Future<void> savePending(PendingApiOperation operation) async =>
+      pending = operation;
   @override
   Future<PendingApiOperation?> readPending() async => pending;
   @override

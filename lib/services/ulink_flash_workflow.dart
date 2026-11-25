@@ -61,11 +61,13 @@ class UlinkFlashSelection {
     required this.session,
     required this.company,
     required this.stockUlink,
+    required this.appType,
   });
 
   final ApiSession session;
   final ApiCompany company;
   final ApiUlink stockUlink;
+  final UlinkAppType appType;
 
   String get ucode => stockUlink.uCode;
 }
@@ -187,6 +189,7 @@ class UlinkRepositoryFlashGateway
         companyId: selection.company.cid,
         ulinkId: selection.stockUlink.uid,
         flashed: true,
+        appType: selection.appType,
       );
       _assignmentHttpStatus = '200';
       _assignmentResult = 'success';

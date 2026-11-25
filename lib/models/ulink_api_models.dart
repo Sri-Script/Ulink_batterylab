@@ -12,6 +12,7 @@ class ApiSession {
     required this.accessTokenExpiresAtUtc,
     required this.refreshToken,
     required this.refreshTokenExpiresAtUtc,
+    this.authenticationId,
   });
 
   factory ApiSession.fromLoginJson(JsonMap json) {
@@ -76,11 +77,26 @@ class ApiSession {
   final String refreshToken;
   final DateTime refreshTokenExpiresAtUtc;
 
+  /// Locally generated on password login. It identifies the authenticated
+  /// session that is permitted to replay a pending destructive operation.
+  final String? authenticationId;
+
   ApiSession withTokens(JsonMap tokens) => ApiSession.fromTokens(
     userId: userId,
     userRole: userRole,
     userName: userName,
     tokens: tokens,
+  ).withAuthenticationId(authenticationId);
+
+  ApiSession withAuthenticationId(String? value) => ApiSession(
+    userId: userId,
+    userRole: userRole,
+    userName: userName,
+    accessToken: accessToken,
+    accessTokenExpiresAtUtc: accessTokenExpiresAtUtc,
+    refreshToken: refreshToken,
+    refreshTokenExpiresAtUtc: refreshTokenExpiresAtUtc,
+    authenticationId: value,
   );
 }
 
@@ -206,6 +222,21 @@ class ApiParamTemplate {
 
 enum ApiProvisioningKind { ulink, device }
 
+/// Deployment type required by the U-Link provisioning API when flashing.
+///
+/// A U-Link reset is deliberately represented by a null value in app code so
+/// the request model, rather than a widget or service string literal, emits
+/// the required empty API value.
+enum UlinkAppType {
+  demo('D', 'Demo'),
+  live('L', 'Live');
+
+  const UlinkAppType(this.apiValue, this.label);
+
+  final String apiValue;
+  final String label;
+}
+
 class ApiProvisioningRequest {
   const ApiProvisioningRequest({
     required this.kind,
@@ -214,6 +245,7 @@ class ApiProvisioningRequest {
     required this.isFlashed,
     this.companyId,
     this.deviceId,
+    this.appType,
   });
   final ApiProvisioningKind kind;
   final String userId;
@@ -221,14 +253,36 @@ class ApiProvisioningRequest {
   final String ulinkId;
   final String? deviceId;
   final int isFlashed;
+  final UlinkAppType? appType;
 
-  JsonMap toJson() => <String, dynamic>{
-    'UserId': userId,
-    if (companyId != null) 'CompanyID': companyId,
-    'UlinkID': ulinkId,
-    if (deviceId != null) 'DeviceID': deviceId,
-    'IsFlashed': isFlashed,
-  };
+  JsonMap toJson() {
+    if (kind == ApiProvisioningKind.ulink) {
+      if (isFlashed != 0 && isFlashed != 1) {
+        throw StateError(
+          'A U-Link provisioning request must be flashed or unflashed.',
+        );
+      }
+      if (isFlashed == 1 && appType == null) {
+        throw StateError(
+          'A flashed U-Link provisioning request requires AppType.',
+        );
+      }
+      if (isFlashed == 0 && appType != null) {
+        throw StateError(
+          'An unflashed U-Link provisioning request must use an empty AppType.',
+        );
+      }
+    }
+    return <String, dynamic>{
+      'UserId': userId,
+      if (companyId != null) 'CompanyID': companyId,
+      'UlinkID': ulinkId,
+      if (deviceId != null) 'DeviceID': deviceId,
+      if (kind == ApiProvisioningKind.ulink)
+        'AppType': isFlashed == 1 ? appType!.apiValue : '',
+      'IsFlashed': isFlashed,
+    };
+  }
 }
 
 class PendingApiOperation {
@@ -240,6 +294,8 @@ class PendingApiOperation {
     required this.userRole,
     required this.createdAtUtc,
     required this.kind,
+    this.authenticationId,
+    this.requiresFreshAuthentication = false,
   });
   final String endpoint;
   final JsonMap body;
@@ -248,6 +304,8 @@ class PendingApiOperation {
   final String userRole;
   final DateTime createdAtUtc;
   final ApiProvisioningKind kind;
+  final String? authenticationId;
+  final bool requiresFreshAuthentication;
 }
 
 JsonMap? _map(Object? value) =>

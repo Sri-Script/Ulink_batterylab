@@ -39,6 +39,9 @@ void main() {
       await _scrollTo(tester, find.text('1. Select company'));
       expect(find.text('1. Select company'), findsOneWidget);
       expect(find.text('2. Select stock U-Link'), findsOneWidget);
+      expect(find.text('3. Select deployment type'), findsOneWidget);
+      expect(find.text('Demo'), findsOneWidget);
+      expect(find.text('Live'), findsOneWidget);
       expect(
         find.text('Factory device must advertise as ULINK.'),
         findsOneWidget,
@@ -51,12 +54,19 @@ void main() {
     },
   );
 
-  testWidgets('enables flash only after both provisioning selections', (
+  testWidgets('keeps flash disabled until a deployment type is selected', (
     tester,
   ) async {
     await _pumpDashboard(tester);
 
-    await _selectProvisioningInputs(tester);
+    await _selectProvisioningInputs(tester, selectDeploymentType: false);
+
+    final withoutType = tester.widget<FilledButton>(
+      find.byKey(const Key('flash-new-ulink')),
+    );
+    expect(withoutType.onPressed, isNull);
+
+    await _selectDeploymentType(tester, UlinkAppType.demo);
 
     final flashButton = tester.widget<FilledButton>(
       find.byKey(const Key('flash-new-ulink')),
@@ -122,7 +132,10 @@ Future<void> _pumpDashboard(
   ),
 );
 
-Future<void> _selectProvisioningInputs(WidgetTester tester) async {
+Future<void> _selectProvisioningInputs(
+  WidgetTester tester, {
+  bool selectDeploymentType = true,
+}) async {
   await _scrollTo(tester, find.byKey(const Key('provision-company-dropdown')));
   await tester.tap(find.byKey(const Key('provision-company-dropdown')));
   await tester.pumpAndSettle();
@@ -133,6 +146,23 @@ Future<void> _selectProvisioningInputs(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('provision-stock-dropdown')));
   await tester.pumpAndSettle();
   await tester.tap(find.text('U-STOCK-1').last);
+  await tester.pumpAndSettle();
+
+  if (selectDeploymentType) {
+    await _selectDeploymentType(tester, UlinkAppType.demo);
+  }
+}
+
+Future<void> _selectDeploymentType(
+  WidgetTester tester,
+  UlinkAppType appType,
+) async {
+  final key = switch (appType) {
+    UlinkAppType.demo => const Key('provision-app-type-demo'),
+    UlinkAppType.live => const Key('provision-app-type-live'),
+  };
+  await _scrollTo(tester, find.byKey(key));
+  await tester.tap(find.byKey(key));
   await tester.pumpAndSettle();
 }
 
@@ -155,8 +185,9 @@ Future<void> _confirmFlash(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('flash-new-ulink')));
   await tester.pumpAndSettle();
   expect(find.textContaining('Company: Alpha Industries'), findsOneWidget);
-  expect(find.textContaining('UlinkID: stock-1'), findsOneWidget);
-  expect(find.textContaining('UCode: U-STOCK-1'), findsOneWidget);
+  expect(find.textContaining('U-Link ID / UID: stock-1'), findsOneWidget);
+  expect(find.textContaining('U-Link UCode: U-STOCK-1'), findsOneWidget);
+  expect(find.textContaining('Deployment type: Demo'), findsOneWidget);
   await tester.tap(
     find.descendant(
       of: find.byType(AlertDialog),

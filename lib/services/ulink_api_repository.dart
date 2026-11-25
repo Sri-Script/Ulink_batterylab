@@ -89,7 +89,9 @@ class UlinkApiRepository {
       'Password': password,
     });
     _requireSuccess(json);
-    final session = ApiSession.fromLoginJson(json);
+    final session = ApiSession.fromLoginJson(
+      json,
+    ).withAuthenticationId(_newUuid());
     await _store.save(session);
     _session = session;
     final payload = _payload(json);
@@ -159,8 +161,24 @@ class UlinkApiRepository {
     required String companyId,
     required String ulinkId,
     required bool flashed,
+    UlinkAppType? appType,
     String? idempotencyKey,
+    bool requireFreshAuthentication = false,
   }) async {
+    if (flashed && appType == null) {
+      throw ArgumentError.value(
+        appType,
+        'appType',
+        'A flashed U-Link provisioning request requires Demo or Live.',
+      );
+    }
+    if (!flashed && appType != null) {
+      throw ArgumentError.value(
+        appType,
+        'appType',
+        'An unflash request must use an empty AppType.',
+      );
+    }
     final session = await _validSession();
     final request = ApiProvisioningRequest(
       kind: ApiProvisioningKind.ulink,
@@ -168,6 +186,7 @@ class UlinkApiRepository {
       companyId: companyId,
       ulinkId: ulinkId,
       isFlashed: flashed ? 1 : 0,
+      appType: appType,
     );
     // Keep the exact operation persisted until the required post-write list
     // refresh succeeds. If that response is lost, the same PUT can still be
@@ -177,6 +196,7 @@ class UlinkApiRepository {
       request,
       idempotencyKey: idempotencyKey,
       clearPendingOnSuccess: false,
+      requireFreshAuthentication: requireFreshAuthentication,
     );
     final ulinks = await getCompanyUlinks(
       userId: session.userId,
@@ -220,6 +240,13 @@ class UlinkApiRepository {
         pending.userRole != session.userRole) {
       return false;
     }
+    // A password re-login creates a different local authentication identity.
+    // Never replay a pending destructive request in that new login.
+    if (pending.requiresFreshAuthentication &&
+        (pending.authenticationId == null ||
+            pending.authenticationId != session.authenticationId)) {
+      return false;
+    }
     final validSession = await _validSession();
     final response = await _client.put(
       _uri(pending.endpoint),
@@ -238,24 +265,32 @@ class UlinkApiRepository {
     return true;
   }
 
+  /// Use only after a definitive server rejection. Unknown results remain
+  /// persisted so the identical request can be retried idempotently.
+  Future<void> discardPendingProvisioning() => _store.clearPending();
+
   Future<void> _sendProvisioning(
     ApiSession session,
     ApiProvisioningRequest request, {
     String? idempotencyKey,
     bool clearPendingOnSuccess = true,
+    bool requireFreshAuthentication = false,
   }) async {
     final key = idempotencyKey ?? _newUuid();
+    final body = request.toJson();
     final endpoint = request.kind == ApiProvisioningKind.ulink
         ? '/api/v1/ulinks/UpdateUlinkProvisioning'
         : '/api/v1/devices/UpdateDeviceProvisioning';
     final pending = PendingApiOperation(
       endpoint: endpoint,
-      body: request.toJson(),
+      body: body,
       idempotencyKey: key,
       userId: session.userId,
       userRole: session.userRole,
       createdAtUtc: _now().toUtc(),
       kind: request.kind,
+      authenticationId: session.authenticationId,
+      requiresFreshAuthentication: requireFreshAuthentication,
     );
     await _store.savePending(pending);
     try {
@@ -267,7 +302,7 @@ class UlinkApiRepository {
           'Authorization': 'Bearer ${session.accessToken}',
           'Idempotency-Key': key,
         },
-        body: jsonEncode(request.toJson()),
+        body: jsonEncode(body),
       );
       final json = _decode(response);
       if (response.statusCode != 200) _throwServer(json, response.statusCode);

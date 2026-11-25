@@ -90,6 +90,18 @@ class UlinkFlashProtocol {
     }
     return '${jsonEncode(<String, String>{'cmd': 'SET_UCODE', 'ucode': ucode})}\n';
   }
+
+  /// Rev5 identity removal command. The same UCode validation used for
+  /// provisioning prevents a command from being directed at an ambiguous
+  /// assigned advertisement.
+  static String encodeUnflashUcode(String ucode) {
+    if (!isValidUcode(ucode)) {
+      throw const UlinkSettingsException(
+        'UCode must contain 1â€“23 ASCII letters, digits, underscores, or hyphens.',
+      );
+    }
+    return '${jsonEncode(<String, String>{'cmd': 'UNFLASH_UCODE', 'ucode': ucode})}\n';
+  }
 }
 
 sealed class UlinkProtocolEvent {
@@ -115,6 +127,11 @@ class UlinkDeveloperModeEvent extends UlinkProtocolEvent {
 
 class UlinkUcodeWrittenEvent extends UlinkProtocolEvent {
   const UlinkUcodeWrittenEvent(this.ucode);
+  final String ucode;
+}
+
+class UlinkUcodeClearedEvent extends UlinkProtocolEvent {
+  const UlinkUcodeClearedEvent(this.ucode);
   final String ucode;
 }
 
@@ -190,6 +207,9 @@ class UlinkSettingsParser {
       }
       if (value['event'] == 'ucode_written' && value['ucode'] is String) {
         return UlinkUcodeWrittenEvent(value['ucode'] as String);
+      }
+      if (value['event'] == 'ucode_cleared' && value['ucode'] is String) {
+        return UlinkUcodeClearedEvent(value['ucode'] as String);
       }
       if (value['key'] is String && value['saved'] is bool) {
         return UlinkSetReplyEvent(
@@ -352,6 +372,45 @@ class UlinkUcodeResponseGate implements _UlinkResponseGate<void> {
     timeout,
     onTimeout: () => throw const UlinkSettingsException(
       'Timed out waiting for U-Link to confirm the UCode.',
+    ),
+  );
+}
+
+/// Accepts only the documented Rev5 positive unflash acknowledgement. ATT
+/// write completion is deliberately not treated as firmware success.
+class UlinkUnflashResponseGate implements _UlinkResponseGate<void> {
+  UlinkUnflashResponseGate(this.ucode);
+  final String ucode;
+  final Completer<void> _completion = Completer<void>();
+
+  @override
+  void accept(UlinkProtocolEvent event) {
+    if (_completion.isCompleted) return;
+    if (event is UlinkUcodeClearedEvent) {
+      if (event.ucode == ucode) {
+        _completion.complete();
+      } else {
+        fail('U-Link confirmed that a different UCode was cleared.');
+      }
+    } else if (event is UlinkErrorEvent) {
+      fail(event.message);
+    } else if (event is UlinkMalformedEvent) {
+      fail('U-Link sent an invalid UCode-clear response.');
+    }
+  }
+
+  @override
+  void fail(String message) {
+    if (!_completion.isCompleted) {
+      _completion.completeError(UlinkSettingsException(message));
+    }
+  }
+
+  @override
+  Future<void> wait(Duration timeout) => _completion.future.timeout(
+    timeout,
+    onTimeout: () => throw const UlinkSettingsException(
+      'Timed out waiting for U-Link to confirm identity removal.',
     ),
   );
 }
@@ -543,6 +602,23 @@ class UlinkBleProvisioningClient
         UlinkUcodeResponseGate(ucode),
       );
       _responseCategory = 'positive ACK';
+    } catch (_) {
+      _recordResponseFailure();
+      rethrow;
+    }
+  }
+
+  /// This has no retry path: a clear acknowledgement is irreversible and the
+  /// firmware reboots immediately afterwards.
+  Future<void> unflashUcode(String ucode) async {
+    _setUcodeWrite = 'unflash sent';
+    _responseCategory = 'not observed';
+    try {
+      await _writeAndWait<void>(
+        utf8.encode(UlinkFlashProtocol.encodeUnflashUcode(ucode)),
+        UlinkUnflashResponseGate(ucode),
+      );
+      _responseCategory = 'ucode_cleared ACK';
     } catch (_) {
       _recordResponseFailure();
       rethrow;

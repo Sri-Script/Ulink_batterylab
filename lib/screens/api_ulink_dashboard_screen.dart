@@ -7,6 +7,7 @@ import '../services/ulink_api_repository.dart';
 import '../services/ulink_ble_provisioning_client.dart';
 import '../services/ulink_flash_workflow.dart';
 import '../services/ulink_login_preferences.dart';
+import '../services/ulink_unflash_workflow.dart';
 import 'ulink_device_picker_screen.dart';
 import 'ulink_login_screen.dart';
 import 'ulink_wifi_provisioning_screen.dart';
@@ -32,6 +33,7 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
   bool _refreshing = false;
   ApiCompany? _selectedCompany;
   ApiUlink? _selectedStock;
+  UlinkAppType? _selectedAppType;
   UlinkFlashStage? _flashStage;
   UlinkSettingsClient? _flashedSettingsClient;
   String? _flashError;
@@ -63,7 +65,8 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
       !_refreshing &&
       _flashStage == null &&
       _selectedCompany != null &&
-      _selectedStock != null;
+      _selectedStock != null &&
+      _selectedAppType != null;
 
   Future<void> _refreshLoginData() async {
     final password = await _askForPassword(context);
@@ -132,11 +135,13 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
   Future<void> _flashSelectedUlink() async {
     final company = _selectedCompany;
     final stock = _selectedStock;
-    if (company == null || stock == null) return;
+    final appType = _selectedAppType;
+    if (company == null || stock == null || appType == null) return;
     final selection = UlinkFlashSelection(
       session: _login.session,
       company: company,
       stockUlink: stock,
+      appType: appType,
     );
     final confirmed =
         await showDialog<bool>(
@@ -144,7 +149,11 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
           builder: (context) => AlertDialog(
             title: const Text('Flash U-Link?'),
             content: Text(
-              'This Rev5 operation is write-once.\n\nCompany: ${company.cName}\nUlinkID: ${stock.uid}\nUCode: ${stock.uCode}',
+              'Company: ${company.cName}\n'
+              'U-Link UCode: ${stock.uCode}\n'
+              'U-Link ID / UID: ${stock.uid}\n'
+              'Deployment type: ${appType.label}\n\n'
+              'Warning: UCode flashing is write-once unless explicitly unflashed.',
             ),
             actions: [
               TextButton(
@@ -383,6 +392,7 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
                             company: company,
                             session: _login.session,
                             repository: widget.repository,
+                            loginPreferences: widget.loginPreferences,
                           ),
                         ),
                       ),
@@ -485,6 +495,36 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
+                      const Text('3. Select deployment type'),
+                      const SizedBox(height: 4),
+                      Semantics(
+                        label: 'Select deployment type',
+                        child: IgnorePointer(
+                          ignoring: _flashStage != null,
+                          child: RadioGroup<UlinkAppType>(
+                            groupValue: _selectedAppType,
+                            onChanged: (type) =>
+                                setState(() => _selectedAppType = type),
+                            child: Column(
+                              children: [
+                                RadioListTile<UlinkAppType>(
+                                  key: const Key('provision-app-type-demo'),
+                                  contentPadding: EdgeInsets.zero,
+                                  title: const Text('Demo'),
+                                  value: UlinkAppType.demo,
+                                ),
+                                RadioListTile<UlinkAppType>(
+                                  key: const Key('provision-app-type-live'),
+                                  contentPadding: EdgeInsets.zero,
+                                  title: const Text('Live'),
+                                  value: UlinkAppType.live,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       Semantics(
                         label: 'Flash New U-Link',
                         button: true,
@@ -806,10 +846,12 @@ class ApiCompanyUlinksScreen extends StatefulWidget {
     required this.company,
     required this.session,
     required this.repository,
+    this.loginPreferences,
   });
   final ApiCompany company;
   final ApiSession session;
   final UlinkApiRepository repository;
+  final UlinkLoginPreferences? loginPreferences;
   @override
   State<ApiCompanyUlinksScreen> createState() => _ApiCompanyUlinksScreenState();
 }
@@ -848,16 +890,22 @@ class _ApiCompanyUlinksScreenState extends State<ApiCompanyUlinksScreen> {
                   (ulink) => Card(
                     child: _UlinkTile(
                       ulink: ulink,
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => ApiDevicesScreen(
-                            company: widget.company,
-                            ulink: ulink,
-                            session: widget.session,
-                            repository: widget.repository,
+                      onTap: () async {
+                        final changed = await Navigator.of(context).push<bool>(
+                          MaterialPageRoute<bool>(
+                            builder: (_) => ApiDevicesScreen(
+                              company: widget.company,
+                              ulink: ulink,
+                              session: widget.session,
+                              repository: widget.repository,
+                              loginPreferences: widget.loginPreferences,
+                            ),
                           ),
-                        ),
-                      ),
+                        );
+                        if (changed == true && mounted) {
+                          setState(() => _ulinks = _load());
+                        }
+                      },
                     ),
                   ),
                 )
@@ -876,22 +924,175 @@ class ApiDevicesScreen extends StatefulWidget {
     required this.ulink,
     required this.session,
     required this.repository,
+    this.loginPreferences,
   });
   final ApiCompany company;
   final ApiUlink ulink;
   final ApiSession session;
   final UlinkApiRepository repository;
+  final UlinkLoginPreferences? loginPreferences;
   @override
   State<ApiDevicesScreen> createState() => _ApiDevicesScreenState();
 }
 
 class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
   late Future<List<ApiDevice>> _devices = _load();
+  UlinkUnflashStage? _unflashStage;
+  String? _unflashError;
+  UlinkRepositoryUnflashApiGateway? _pendingUnflashApi;
+  UlinkUnflashSelection? _pendingUnflashSelection;
   Future<List<ApiDevice>> _load() => widget.repository.getDevices(
     userId: widget.session.userId,
     companyId: widget.company.cid,
     ulinkId: widget.ulink.uid,
   );
+
+  Future<void> _unflashSelectedUlink() async {
+    if (widget.ulink.uif != true || _unflashStage != null) return;
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Unflash U-Link?'),
+            content: Text(
+              'Company: ${widget.company.cName}\n'
+              'ULinkID: ${widget.ulink.uid}\n'
+              'Current UCode: ${widget.ulink.uCode}\n\n'
+              'Unflashing removes this U-Link’s identity and resets associated server device data. This cannot be undone automatically.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Unflash U-Link'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    final password = await _askForPassword(
+      context,
+      title: 'Confirm API password',
+      actionLabel: 'Sign in and unflash',
+    );
+    if (password == null || !mounted) return;
+
+    setState(() {
+      _unflashError = null;
+      _unflashStage = UlinkUnflashStage.freshSignIn;
+    });
+    final api = UlinkRepositoryUnflashApiGateway(widget.repository);
+    try {
+      final username =
+          await (widget.loginPreferences ??
+                  SharedPreferencesUlinkLoginPreferences())
+              .readUsername() ??
+          widget.session.userName;
+      final freshLogin = await api.authenticateFreshly(
+        username: username,
+        password: password,
+      );
+      if (!mounted) return;
+      final selection = UlinkUnflashSelection(
+        session: freshLogin.session,
+        company: widget.company,
+        ulink: widget.ulink,
+      );
+      _pendingUnflashApi = api;
+      _pendingUnflashSelection = selection;
+      await UlinkUnflashWorkflow(
+        ble: FlutterUlinkUnflashBleGateway(),
+        api: api,
+      ).run(
+        selection,
+        onProgress: (stage) {
+          if (mounted) setState(() => _unflashStage = stage);
+        },
+      );
+      if (!mounted) return;
+      final next = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('U-Link unflashed successfully'),
+          content: const Text(
+            'The U-Link is now factory-advertising as ULINK and its server assignment has been cleared.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'dashboard'),
+              child: const Text('Return to dashboard'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, 'flash'),
+              child: const Text('Flash a new U-Code'),
+            ),
+          ],
+        ),
+      );
+      if (mounted && next != null) {
+        // Both choices return through the company flow with a refresh signal;
+        // the dashboard exposes the existing Flash New U-Link control.
+        Navigator.of(context).pop(true);
+      }
+    } on UlinkUnflashException catch (error) {
+      if (mounted) {
+        setState(() {
+          _unflashError = error.message;
+          if (!error.pendingServerRetry) {
+            _pendingUnflashApi = null;
+            _pendingUnflashSelection = null;
+          }
+        });
+      }
+    } on UlinkApiException catch (error) {
+      if (mounted) setState(() => _unflashError = error.message);
+    } finally {
+      if (mounted && _unflashStage != UlinkUnflashStage.completed) {
+        setState(() => _unflashStage = null);
+      }
+    }
+  }
+
+  Future<void> _retryPendingUnflashServerUpdate() async {
+    final api = _pendingUnflashApi;
+    final selection = _pendingUnflashSelection;
+    if (api == null || selection == null || _unflashStage != null) return;
+    setState(() {
+      _unflashError = null;
+      _unflashStage = UlinkUnflashStage.updatingServer;
+    });
+    try {
+      final ulinks = await api.retryPendingUpdate(selection);
+      if (ulinks.any(
+        (item) => item.uid == selection.ulink.uid && item.uif == true,
+      )) {
+        throw const UlinkUnflashException(
+          'The server still shows this U-Link as flashed. Needs reconciliation; do not reflash it.',
+          needsReconciliation: true,
+        );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('U-Link unflashed successfully')),
+      );
+      Navigator.of(context).pop(true);
+    } on UlinkUnflashException catch (error) {
+      if (mounted) setState(() => _unflashError = error.message);
+    } on UlinkApiException catch (error) {
+      if (mounted) setState(() => _unflashError = error.message);
+    } finally {
+      if (mounted) setState(() => _unflashStage = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: Text(widget.ulink.uCode)),
@@ -908,17 +1109,49 @@ class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
           );
         }
         final devices = snapshot.data ?? const <ApiDevice>[];
-        if (devices.isEmpty) {
-          return const _Empty('No devices are assigned to this U-Link.');
-        }
         return RefreshIndicator(
           onRefresh: () async => setState(() => _devices = _load()),
           child: ListView.separated(
             padding: const EdgeInsets.all(16),
-            itemCount: devices.length,
+            itemCount: devices.length + 1,
             separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (_, index) {
-              final device = devices[index];
+              if (index == 0) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (widget.ulink.uif == true)
+                      FilledButton.icon(
+                        key: const Key('unflash-ulink'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.error,
+                        ),
+                        onPressed: _unflashStage == null
+                            ? _unflashSelectedUlink
+                            : null,
+                        icon: const Icon(Icons.warning_amber_outlined),
+                        label: const Text('Unflash U-Link'),
+                      ),
+                    if (_unflashStage != null || _unflashError != null) ...[
+                      const SizedBox(height: 12),
+                      _UnflashStatusPanel(
+                        stage: _unflashStage,
+                        error: _unflashError,
+                        onRetryPendingServerUpdate:
+                            _pendingUnflashApi == null ||
+                                _pendingUnflashSelection == null
+                            ? null
+                            : _retryPendingUnflashServerUpdate,
+                      ),
+                    ],
+                    if (devices.isEmpty) ...[
+                      const SizedBox(height: 16),
+                      const _Empty('No devices are assigned to this U-Link.'),
+                    ],
+                  ],
+                );
+              }
+              final device = devices[index - 1];
               return Card(
                 child: ListTile(
                   title: Text(device.dCode),
@@ -1065,12 +1298,58 @@ String _friendly(Object? error) {
   };
 }
 
-Future<String?> _askForPassword(BuildContext context) async {
+class _UnflashStatusPanel extends StatelessWidget {
+  const _UnflashStatusPanel({
+    this.stage,
+    this.error,
+    this.onRetryPendingServerUpdate,
+  });
+  final UlinkUnflashStage? stage;
+  final String? error;
+  final VoidCallback? onRetryPendingServerUpdate;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Unflash status',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          if (stage != null) ...[const SizedBox(height: 8), Text(stage!.label)],
+          if (error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+          if (onRetryPendingServerUpdate != null) ...[
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: onRetryPendingServerUpdate,
+              child: const Text('Retry pending server update'),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+}
+
+Future<String?> _askForPassword(
+  BuildContext context, {
+  String title = 'Refresh session data',
+  String actionLabel = 'Refresh',
+}) async {
   final controller = TextEditingController();
   return showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Refresh session data'),
+      title: Text(title),
       content: TextField(
         controller: controller,
         obscureText: true,
@@ -1084,7 +1363,7 @@ Future<String?> _askForPassword(BuildContext context) async {
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, controller.text),
-          child: const Text('Refresh'),
+          child: Text(actionLabel),
         ),
       ],
     ),
