@@ -26,12 +26,12 @@ extension UlinkUnflashStageText on UlinkUnflashStage {
     UlinkUnflashStage.freshSignIn => 'Fresh sign-in',
     UlinkUnflashStage.apiPreflight => 'API preflight',
     UlinkUnflashStage.locatingAssignedUlink => 'Locating assigned U-Link',
-    UlinkUnflashStage.secureConnection => 'Secure connection',
+    UlinkUnflashStage.secureConnection => 'Preparing secure connection',
     UlinkUnflashStage.clearingUcode => 'Clearing UCode',
     UlinkUnflashStage.waitingForRestart => 'Waiting for restart',
     UlinkUnflashStage.verifyingFactoryUlink => 'Verifying ULINK',
     UlinkUnflashStage.updatingServer => 'Updating server',
-    UlinkUnflashStage.completed => 'Completed',
+    UlinkUnflashStage.completed => 'Unflash completed',
   };
 }
 
@@ -255,7 +255,7 @@ class UlinkUnflashWorkflow {
         factoryVerified = true;
       } catch (_) {
         throw const UlinkUnflashException(
-          'Identity may have been cleared; do not retry. Verify manually.',
+          'U-Link may already be cleared, but server unflash was not sent. Do not repeat the BLE command; verify the device before retrying the server step.',
           identityMayBeCleared: true,
         );
       }
@@ -282,7 +282,7 @@ class UlinkUnflashWorkflow {
     } catch (_) {
       if (positiveAck && !factoryVerified) {
         throw const UlinkUnflashException(
-          'Identity may have been cleared; do not retry. Verify manually.',
+          'U-Link may already be cleared, but server unflash was not sent. Do not repeat the BLE command; verify the device before retrying the server step.',
           identityMayBeCleared: true,
         );
       }

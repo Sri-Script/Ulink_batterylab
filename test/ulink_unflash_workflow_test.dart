@@ -35,6 +35,13 @@ void main() {
       mismatch.wait(const Duration(milliseconds: 1)),
       throwsA(isA<UlinkSettingsException>()),
     );
+
+    final negative = UlinkUnflashResponseGate(ucode);
+    negative.accept(const UlinkUcodeClearedEvent(ucode, ok: false));
+    await expectLater(
+      negative.wait(const Duration(milliseconds: 1)),
+      throwsA(isA<UlinkSettingsException>()),
+    );
   });
 
   test('negative firmware ACK never succeeds', () async {

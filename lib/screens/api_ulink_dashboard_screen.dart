@@ -949,6 +949,35 @@ class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
 
   Future<void> _unflashSelectedUlink() async {
     if (widget.ulink.uif != true || _unflashStage != null) return;
+    final password = await _askForPassword(
+      context,
+      title: 'Confirm API password',
+      actionLabel: 'Sign in and continue',
+    );
+    if (password == null || !mounted) return;
+    try {
+      final username =
+          await (widget.loginPreferences ??
+                  SharedPreferencesUlinkLoginPreferences())
+              .readUsername() ??
+          widget.session.userName;
+      final api = UlinkRepositoryUnflashApiGateway(widget.repository);
+      final freshLogin = await api.authenticateFreshly(
+        username: username,
+        password: password,
+      );
+      if (!mounted) return;
+      await _runUnflashFlow(freshLogin, api);
+    } on UlinkApiException catch (error) {
+      if (mounted) setState(() => _unflashError = error.message);
+    }
+  }
+
+  Future<void> _runUnflashFlow(
+    ApiLoginResult freshLogin,
+    UlinkRepositoryUnflashApiGateway api,
+  ) async {
+    if (widget.ulink.uif != true || _unflashStage != null) return;
     final confirmed =
         await showDialog<bool>(
           context: context,
@@ -956,8 +985,11 @@ class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
             title: const Text('Unflash U-Link?'),
             content: Text(
               'Company: ${widget.company.cName}\n'
-              'ULinkID: ${widget.ulink.uid}\n'
-              'Current UCode: ${widget.ulink.uCode}\n\n'
+              'U-Link UCode: ${widget.ulink.uCode}\n'
+              'U-Link UID: ${widget.ulink.uid}\n\n'
+              'This permanently clears the UCode from the physical U-Link and returns its Bluetooth name to ULINK.\n\n'
+              'The server operation may delete linked device data.\n\n'
+              'Wi-Fi, password, APN, mode, calibration, and unrelated settings are not erased.\n\n'
               'Unflashing removes this U-Link’s identity and resets associated server device data. This cannot be undone automatically.',
             ),
             actions: [
@@ -970,36 +1002,18 @@ class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
                   backgroundColor: Theme.of(context).colorScheme.error,
                 ),
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Unflash U-Link'),
+                child: const Text('Permanently unflash U-Link'),
               ),
             ],
           ),
         ) ??
         false;
     if (!confirmed || !mounted) return;
-    final password = await _askForPassword(
-      context,
-      title: 'Confirm API password',
-      actionLabel: 'Sign in and unflash',
-    );
-    if (password == null || !mounted) return;
-
     setState(() {
       _unflashError = null;
-      _unflashStage = UlinkUnflashStage.freshSignIn;
+      _unflashStage = null;
     });
-    final api = UlinkRepositoryUnflashApiGateway(widget.repository);
     try {
-      final username =
-          await (widget.loginPreferences ??
-                  SharedPreferencesUlinkLoginPreferences())
-              .readUsername() ??
-          widget.session.userName;
-      final freshLogin = await api.authenticateFreshly(
-        username: username,
-        password: password,
-      );
-      if (!mounted) return;
       final selection = UlinkUnflashSelection(
         session: freshLogin.session,
         company: widget.company,

@@ -131,8 +131,9 @@ class UlinkUcodeWrittenEvent extends UlinkProtocolEvent {
 }
 
 class UlinkUcodeClearedEvent extends UlinkProtocolEvent {
-  const UlinkUcodeClearedEvent(this.ucode);
+  const UlinkUcodeClearedEvent(this.ucode, {this.ok = true});
   final String ucode;
+  final bool ok;
 }
 
 class UlinkErrorEvent extends UlinkProtocolEvent {
@@ -209,7 +210,10 @@ class UlinkSettingsParser {
         return UlinkUcodeWrittenEvent(value['ucode'] as String);
       }
       if (value['event'] == 'ucode_cleared' && value['ucode'] is String) {
-        return UlinkUcodeClearedEvent(value['ucode'] as String);
+        return UlinkUcodeClearedEvent(
+          value['ucode'] as String,
+          ok: value['ok'] == true,
+        );
       }
       if (value['key'] is String && value['saved'] is bool) {
         return UlinkSetReplyEvent(
@@ -387,8 +391,10 @@ class UlinkUnflashResponseGate implements _UlinkResponseGate<void> {
   void accept(UlinkProtocolEvent event) {
     if (_completion.isCompleted) return;
     if (event is UlinkUcodeClearedEvent) {
-      if (event.ucode == ucode) {
+      if (event.ok && event.ucode == ucode) {
         _completion.complete();
+      } else if (!event.ok) {
+        fail('U-Link did not confirm that its UCode was cleared.');
       } else {
         fail('U-Link confirmed that a different UCode was cleared.');
       }

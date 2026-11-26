@@ -6,11 +6,46 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:ulink_batterylab/models/ulink_api_models.dart';
 import 'package:ulink_batterylab/screens/api_ulink_dashboard_screen.dart';
+import 'package:ulink_batterylab/services/api_session_store.dart';
 import 'package:ulink_batterylab/services/ulink_api_repository.dart';
 import 'package:ulink_batterylab/services/ulink_ble_provisioning_client.dart';
 import 'package:ulink_batterylab/services/ulink_flash_workflow.dart';
 
 void main() {
+  testWidgets('unflash is visible only for a flashed assigned U-Link', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ApiDevicesScreen(
+          company: const ApiCompany(cid: 'company-1', cName: 'Alpha'),
+          ulink: const ApiUlink(
+            uid: 'assigned-1',
+            uCode: 'U-ASSIGNED-1',
+            uif: true,
+          ),
+          session: _login().session,
+          repository: _devicesRepository(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('unflash-ulink')), findsOneWidget);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ApiDevicesScreen(
+          company: const ApiCompany(cid: 'company-1', cName: 'Alpha'),
+          ulink: const ApiUlink(uid: 'stock-1', uCode: 'U-STOCK-1', uif: false),
+          session: _login().session,
+          repository: _devicesRepository(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('unflash-ulink')), findsNothing);
+  });
+
   testWidgets(
     'shows summary cards, compact company rows, stock details, and provision controls',
     (tester) async {
@@ -114,6 +149,16 @@ void main() {
       expect(find.text('U-Link provisioned'), findsOneWidget);
       expect(find.text('Open U-Link Settings'), findsOneWidget);
     },
+  );
+}
+
+UlinkApiRepository _devicesRepository() {
+  final session = _login().session;
+  return UlinkApiRepository(
+    sessionStore: MemoryApiSessionStore()..value = session,
+    client: MockClient(
+      (_) async => http.Response('{"Result":1,"Devices":[]}', 200),
+    ),
   );
 }
 
