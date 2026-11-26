@@ -13,9 +13,9 @@ void main() {
 
   test('demo reset clears only demo state', () {
     VtmDemoStore.values['voltage'] = '9';
-    VtmDemoStore.certificates.add('demo');
+    VtmDemoStore.instance.issueCertificate();
     VtmDemoStore.reset();
     expect(VtmDemoStore.values['voltage'], '3.70');
-    expect(VtmDemoStore.certificates, isEmpty);
+    expect(VtmDemoStore.instance.certificates, isEmpty);
   });
 }
