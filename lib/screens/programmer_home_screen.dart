@@ -7,9 +7,14 @@ import 'package:provider/provider.dart';
 
 import '../config/app_config.dart';
 import '../config/device_contract.dart';
+import '../config/vtm_nus_contract.dart';
 import '../models/device_descriptor.dart';
 import '../providers/connection_controller.dart';
+import '../services/vtm_nus_connection.dart';
 import 'calibration_screen.dart';
+import 'vtm_terminal_screen.dart';
+import 'vtm_demo_calibration_screen.dart';
+import '../vtm/vtm_demo_connection.dart';
 
 class ProgrammerHomeScreen extends StatefulWidget {
   const ProgrammerHomeScreen({super.key});
@@ -109,7 +114,8 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
   void _logAdvertisement(ScanResult result) {
     if (!kDebugMode) return;
     final data = result.advertisementData;
-    debugPrint('Ulink BLE scan: id=${result.device.remoteId.str} advName="${data.advName}" '
+    final prefix = _isVtm(result) ? 'VTM BLE scan' : 'Ulink BLE scan';
+    debugPrint('$prefix: id=${result.device.remoteId.str} advName="${data.advName}" '
         'platformName="${result.device.platformName}" services=${data.serviceUuids} '
         'rssi=${result.rssi}; listed');
   }
@@ -129,6 +135,10 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
   Future<void> _connect() async {
     final result = _selectedId == null ? null : _nearby[_selectedId];
     if (result == null || _connecting) return;
+    if (_isVtm(result)) {
+      await _connectVtm(result);
+      return;
+    }
     final descriptor = _descriptor(result);
     setState(() { _connecting = true; _error = null; _status = 'Connecting and discovering GATT services…'; });
     final success = await context.read<ConnectionController>().connect(descriptor);
@@ -141,12 +151,60 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
     if (success) await _openCalibration(descriptor);
   }
 
+  /// VTM uses an independent Nordic UART path. It never enters the Ulink
+  /// controller, so Ulink JSON/status/calibration commands cannot be sent.
+  Future<void> _connectVtm(ScanResult selectedResult) async {
+    final name = _advertisementName(selectedResult);
+    final connection = VtmNusConnection(
+      selectedName: name,
+      selectedRemoteId: selectedResult.device.remoteId.str,
+    );
+    setState(() {
+      _connecting = true;
+      _error = null;
+      _status = 'Looking for a fresh VTM advertisement…';
+    });
+    try {
+      await connection.connect();
+      if (!mounted) {
+        await connection.dispose();
+        return;
+      }
+      setState(() {
+        _connecting = false;
+        _status = 'Connected to Battery Mobile ESP UART.';
+      });
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VtmTerminalScreen(connection: connection, name: name),
+        ),
+      );
+    } catch (error) {
+      await connection.dispose();
+      if (mounted) {
+        setState(() {
+          _connecting = false;
+          _error = _clean(error);
+          _status = 'VTM connection was not completed. Scan and retry.';
+        });
+      }
+    }
+  }
+
   Future<void> _connectDemo() async {
     final descriptor = DeviceDescriptor(mode: TransportType.ble, deviceId: 'ULINK-GW-TEST01', gatewayId: 'ULINK-GW-TEST01', serviceUuid: DeviceContract.defaultBleServiceUuid, advertisingName: 'ULINK-GW-TEST01');
     setState(() { _connecting = true; _status = 'Connecting to demo gateway…'; });
     final success = await context.read<ConnectionController>().connect(descriptor);
     if (mounted) setState(() { _connecting = false; _error = success ? null : context.read<ConnectionController>().errorMessage; _status = success ? 'Connected to demo gateway.' : 'Demo connection failed.'; });
     if (success && mounted) await _openCalibration(descriptor);
+  }
+
+  Future<void> _openVtmDemo() async {
+    final connection = VtmDemoConnection();
+    await connection.connect();
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const VtmDemoCalibrationScreen()));
+    await connection.disconnect();
   }
 
   Future<void> _openCalibration(DeviceDescriptor descriptor) async {
@@ -183,6 +241,14 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
   String _clean(Object error) => error.toString().replaceFirst(RegExp(r'^(StateError|Exception):\s*'), '');
   void _log(String message) { if (kDebugMode) debugPrint('Ulink BLE: $message'); }
 
+  String _advertisementName(ScanResult result) {
+    final advertised = result.advertisementData.advName;
+    return advertised.isNotEmpty ? advertised : result.device.platformName;
+  }
+
+  bool _isVtm(ScanResult result) =>
+      VtmNusContract.matchesName(_advertisementName(result));
+
   @override
   void dispose() { _scanSubscription?.cancel(); _adapterSubscription?.cancel(); FlutterBluePlus.stopScan(); super.dispose(); }
 
@@ -190,7 +256,9 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
   Widget build(BuildContext context) {
     final controller = context.watch<ConnectionController>();
     // ignore: no_leading_underscores_for_local_identifiers
-    String _name(ScanResult result) => controller.deviceName(_descriptor(result));
+    String _name(ScanResult result) => _isVtm(result)
+        ? _advertisementName(result)
+        : controller.deviceName(_descriptor(result));
     final devices = _nearby.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
     final demo = AppConfig.demoMode;
     return Scaffold(
@@ -214,6 +282,7 @@ class _ProgrammerHomeScreenState extends State<ProgrammerHomeScreen> {
           },
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           ListTile(contentPadding: EdgeInsets.zero, leading: Icon(demo || _adapterState == BluetoothAdapterState.on ? Icons.bluetooth_connected : Icons.bluetooth_disabled), title: Text(demo ? 'Demo Bluetooth mode' : _adapterMessage(_adapterState)), subtitle: Text(_status)),
+          Card(child: ListTile(title: const Text('VTM-TEST'), subtitle: const Text('Demo device — no Bluetooth hardware required'), leading: const Icon(Icons.science), trailing: FilledButton(onPressed: _connecting ? null : _openVtmDemo, child: const Text('Open VTM Demo')))),
           if (_error != null) _ErrorBanner(message: _error!),
           if (_scanning || _connecting) const LinearProgressIndicator(),
           const SizedBox(height: 8),
