@@ -7,6 +7,7 @@ void main() {
   final store = VtmDemoStore.instance;
 
   setUp(() {
+    VtmDemoStore.reset();
     store.period = VtmTrendPeriod.day;
   });
 
@@ -49,10 +50,13 @@ void main() {
       await tester.pump();
 
       expect(find.text('Battery Monitoring'), findsOneWidget);
-      expect(find.text('Demo site: Lab bench'), findsOneWidget);
-      expect(find.text('Demo Online'), findsOneWidget);
+      expect(find.text('VTM-TEST Dashboard'), findsOneWidget);
+      expect(find.text('Site: Lab Bench'), findsOneWidget);
+      expect(find.text('Online'), findsOneWidget);
       expect(find.text('Battery 1 (12 V)'), findsOneWidget);
       expect(find.text('Battery 2 (12 V)'), findsOneWidget);
+      expect(find.text('Healthy'), findsNWidgets(2));
+      expect(find.textContaining('Last updated:'), findsNWidgets(2));
       expect(find.byType(LineChart), findsAtLeastNWidgets(1));
 
       final batteryOne = tester.getTopLeft(find.text('Battery 1 (12 V)'));
@@ -68,6 +72,81 @@ void main() {
       await tester.pump();
       expect(find.text('Temperature'), findsWidgets);
       expect(find.byType(LineChart), findsAtLeastNWidgets(1));
+    },
+  );
+
+  testWidgets('Dashboard contains no visible demo or simulated wording', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(393, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(_demoApp());
+    await tester.pump();
+
+    final dashboardText = tester
+        .widgetList<Text>(find.byType(Text))
+        .map((widget) => widget.data ?? '')
+        .join(' ')
+        .toLowerCase();
+    expect(dashboardText, isNot(contains('demo')));
+    expect(dashboardText, isNot(contains('simulated')));
+  });
+
+  testWidgets(
+    'VTM-TEST calibration validates input and saves only on completion',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(393, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(_demoApp());
+      await tester.pump();
+
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, -900));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Calibration'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(VtmTestCalibrationScreen), findsOneWidget);
+      await tester.tap(find.text('Complete Calibration'));
+      await tester.pump();
+      expect(
+        find.textContaining('Enter Battery 1 voltage offset'),
+        findsOneWidget,
+      );
+      expect(store.calibrationPassed, isFalse);
+      expect(find.text('Calibration Successful'), findsNothing);
+
+      final fields = find.byType(TextFormField);
+      await tester.enterText(fields.at(0), '0.12');
+      await tester.enterText(fields.at(1), '-0.08');
+      await tester.enterText(fields.at(2), '0.35');
+      await tester.tap(find.text('Complete Calibration'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Calibration Successful'), findsOneWidget);
+      expect(store.calibrationPassed, isTrue);
+      expect(store.calibrationCompletedAt, isNotNull);
+      expect(store.calibrationValues?['batteryOneVoltageOffset'], 0.12);
+      expect(store.audit.last, contains('Calibration completed'));
+
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(find.text('VTM-TEST Dashboard'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Calibration status: Passed'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pump();
+      expect(find.text('Calibration status: Passed'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Issue Certificate'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pump();
+      await tester.tap(find.text('Issue Certificate'));
+      await tester.pump();
+      expect(store.certificates, isNotEmpty);
     },
   );
 

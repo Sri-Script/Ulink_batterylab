@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:fl_chart/fl_chart.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 enum VtmTrendPeriod { hour, day, week, month }
@@ -46,6 +45,8 @@ class VtmDemoStore extends ChangeNotifier {
 
   VtmTrendPeriod period = VtmTrendPeriod.day;
   bool calibrationPassed = false;
+  Map<String, double>? calibrationValues;
+  DateTime? calibrationCompletedAt;
   bool autoUpdate = false;
   int updateSeconds = 10;
 
@@ -132,7 +133,24 @@ class VtmDemoStore extends ChangeNotifier {
 
   void resetCalibration() {
     calibrationPassed = false;
+    calibrationValues = null;
+    calibrationCompletedAt = null;
     log('Calibration reset');
+  }
+
+  void completeCalibration({
+    required double batteryOneVoltageOffset,
+    required double batteryTwoVoltageOffset,
+    required double temperatureOffset,
+  }) {
+    calibrationValues = Map.unmodifiable({
+      'batteryOneVoltageOffset': batteryOneVoltageOffset,
+      'batteryTwoVoltageOffset': batteryTwoVoltageOffset,
+      'temperatureOffset': temperatureOffset,
+    });
+    calibrationCompletedAt = DateTime.now();
+    calibrationPassed = true;
+    log('Calibration completed with saved VTM-TEST values');
   }
 
   void issueCertificate() {
@@ -151,6 +169,10 @@ class VtmDemoStore extends ChangeNotifier {
   static void reset() {
     values['voltage'] = '3.70';
     instance._certificates.clear();
+    instance.calibrationPassed = false;
+    instance.calibrationValues = null;
+    instance.calibrationCompletedAt = null;
+    instance.audit.clear();
     instance.notifyListeners();
   }
 }
@@ -183,12 +205,12 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('VTM-TEST Demo'),
+      title: const Text('VTM-TEST Dashboard'),
       actions: [
         IconButton(
           onPressed: store.refresh,
           icon: const Icon(Icons.refresh),
-          tooltip: 'Refresh simulated readings',
+          tooltip: 'Refresh readings',
         ),
       ],
     ),
@@ -289,6 +311,39 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
           height: 198,
           summary: 'Temperature: battery temperature over the selected period.',
         ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Icon(
+              store.calibrationPassed ? Icons.check_circle : Icons.info_outline,
+              color: store.calibrationPassed
+                  ? Colors.green
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
+              size: 18,
+            ),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                'Calibration status: ${store.calibrationPassed ? 'Passed' : 'Not completed'}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        FilledButton.icon(
+          onPressed: _openCalibration,
+          icon: const Icon(Icons.tune),
+          label: const Text('Calibration'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: store.calibrationPassed ? _issueCertificate : null,
+          icon: const Icon(Icons.verified),
+          label: const Text('Issue Certificate'),
+        ),
       ],
     );
   }
@@ -307,7 +362,7 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
                     radius: 21,
                     backgroundColor: Theme.of(
                       context,
-                    ).colorScheme.primary.withOpacity(.18),
+                    ).colorScheme.primary.withValues(alpha: .18),
                     child: Icon(
                       Icons.battery_charging_full,
                       color: Theme.of(context).colorScheme.primary,
@@ -330,7 +385,7 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
                         ),
                         SizedBox(height: 2),
                         Text(
-                          'Demo site: Lab bench',
+                          'Site: Lab Bench',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -422,7 +477,7 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
                       alignment: Alignment.centerLeft,
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        'Healthy \u2022 simulated',
+                        'Healthy',
                         style: TextStyle(
                           color: Colors.green,
                           fontWeight: FontWeight.w600,
@@ -436,7 +491,7 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
                       alignment: Alignment.centerLeft,
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        'Updated ${_timeOfDay(time)}',
+                        'Last updated: ${_timeOfDay(time)}',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -453,7 +508,7 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
   }
 
   Widget _periodDropdown() => DropdownButtonFormField<VtmTrendPeriod>(
-    value: store.period,
+    initialValue: store.period,
     isExpanded: true,
     items: VtmTrendPeriod.values
         .map(
@@ -594,7 +649,7 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
         },
       ),
       DropdownButtonFormField<int>(
-        value: store.updateSeconds,
+        initialValue: store.updateSeconds,
         items: [5, 10, 30]
             .map(
               (value) => DropdownMenuItem(
@@ -629,6 +684,17 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
     ],
   );
 
+  Future<void> _openCalibration() => Navigator.of(context).push(
+    MaterialPageRoute<void>(builder: (_) => const VtmTestCalibrationScreen()),
+  );
+
+  void _issueCertificate() {
+    store.issueCertificate();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('VTM-TEST certificate issued.')),
+    );
+  }
+
   void _confirm(String title, VoidCallback action) {
     showDialog(
       context: context,
@@ -656,6 +722,162 @@ class _VtmDemoShellState extends State<VtmDemoCalibrationScreen> {
       '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 }
 
+/// Calibration entry is intentionally isolated to VTM-TEST in-memory state.
+class VtmTestCalibrationScreen extends StatefulWidget {
+  const VtmTestCalibrationScreen({super.key});
+
+  @override
+  State<VtmTestCalibrationScreen> createState() =>
+      _VtmTestCalibrationScreenState();
+}
+
+class _VtmTestCalibrationScreenState extends State<VtmTestCalibrationScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _batteryOneController = TextEditingController();
+  final _batteryTwoController = TextEditingController();
+  final _temperatureController = TextEditingController();
+  final _store = VtmDemoStore.instance;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _batteryOneController.dispose();
+    _batteryTwoController.dispose();
+    _temperatureController.dispose();
+    super.dispose();
+  }
+
+  String? _validateOffset(String? value, String label) {
+    final text = value?.trim() ?? '';
+    if (text.isEmpty) return 'Enter $label.';
+    final number = double.tryParse(text);
+    if (number == null) return 'Enter a valid number.';
+    if (number < -2 || number > 2) return 'Enter a value between -2.0 and 2.0.';
+    return null;
+  }
+
+  Future<void> _completeCalibration() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() => _submitting = true);
+    try {
+      _store.completeCalibration(
+        batteryOneVoltageOffset: double.parse(
+          _batteryOneController.text.trim(),
+        ),
+        batteryTwoVoltageOffset: double.parse(
+          _batteryTwoController.text.trim(),
+        ),
+        temperatureOffset: double.parse(_temperatureController.text.trim()),
+      );
+      final completedAt = _store.calibrationCompletedAt!;
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green),
+              SizedBox(width: 10),
+              Expanded(child: Text('Calibration Successful')),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'VTM-TEST calibration was completed successfully. Calibration values have been saved.',
+              ),
+              const SizedBox(height: 12),
+              Text('Completed: ${_formatTimestamp(completedAt)}'),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) Navigator.of(context).pop();
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('VTM-TEST Calibration')),
+    body: SafeArea(
+      child: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text(
+              'Calibration values',
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Enter the measured offsets before completing calibration.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 20),
+            _offsetField(
+              controller: _batteryOneController,
+              label: 'Battery 1 voltage offset (V)',
+            ),
+            const SizedBox(height: 12),
+            _offsetField(
+              controller: _batteryTwoController,
+              label: 'Battery 2 voltage offset (V)',
+            ),
+            const SizedBox(height: 12),
+            _offsetField(
+              controller: _temperatureController,
+              label: 'Temperature offset (°C)',
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: _submitting ? null : _completeCalibration,
+              icon: const Icon(Icons.check_circle_outline),
+              label: const Text('Complete Calibration'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _offsetField({
+    required TextEditingController controller,
+    required String label,
+  }) => TextFormField(
+    controller: controller,
+    keyboardType: const TextInputType.numberWithOptions(
+      decimal: true,
+      signed: true,
+    ),
+    textInputAction: TextInputAction.next,
+    autovalidateMode: AutovalidateMode.onUserInteraction,
+    decoration: InputDecoration(
+      labelText: label,
+      border: const OutlineInputBorder(),
+    ),
+    validator: (value) => _validateOffset(value, label),
+  );
+
+  static String _formatTimestamp(DateTime value) =>
+      '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year} '
+      '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+}
+
 class _OnlinePill extends StatelessWidget {
   const _OnlinePill();
 
@@ -663,7 +885,7 @@ class _OnlinePill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     decoration: BoxDecoration(
-      color: Colors.green.withOpacity(.14),
+      color: Colors.green.withValues(alpha: .14),
       borderRadius: BorderRadius.circular(20),
     ),
     child: const Row(
@@ -672,7 +894,7 @@ class _OnlinePill extends StatelessWidget {
         Icon(Icons.circle, size: 8, color: Colors.green),
         SizedBox(width: 5),
         Text(
-          'Demo Online',
+          'Online',
           style: TextStyle(
             color: Colors.green,
             fontWeight: FontWeight.w700,
@@ -852,7 +1074,7 @@ class _VtmLineChart extends StatelessWidget {
           drawVerticalLine: false,
           horizontalInterval: yInterval,
           getDrawingHorizontalLine: (_) =>
-              FlLine(color: labelColor.withOpacity(.18), strokeWidth: 1),
+              FlLine(color: labelColor.withValues(alpha: .18), strokeWidth: 1),
         ),
         borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(

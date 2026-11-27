@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../features/ulink_dashboard/presentation/dashboard_shell.dart';
+import '../features/ulink_dashboard/presentation/widgets/unflash_ulink_action.dart';
 import '../models/ulink_api_models.dart';
 import '../services/acknowledgement_sound_service.dart';
 import '../services/ulink_api_repository.dart';
@@ -37,6 +39,7 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
   UlinkFlashStage? _flashStage;
   UlinkSettingsClient? _flashedSettingsClient;
   String? _flashError;
+  Future<List<ApiUlink>>? _companyUlinks;
 
   static const _testUcode = String.fromEnvironment('ULINK_TEST_UCODE');
 
@@ -89,6 +92,9 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
           _login = refreshed;
           _selectedStock = _stockWithId(selectedStockId);
           _selectedCompany = _companyWithId(selectedCompanyId);
+          _companyUlinks = _selectedCompany == null
+              ? null
+              : _loadCompanyUlinks(_selectedCompany!);
           _selectDevelopmentTestUcodeIfAvailable();
         });
       }
@@ -190,7 +196,20 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
         await result.settingsClient.disconnect();
         return;
       }
-      setState(() => _flashedSettingsClient = result.settingsClient);
+      setState(() {
+        _flashedSettingsClient = result.settingsClient;
+        _selectedStock = null;
+        _selectedAppType = null;
+        _companyUlinks = Future<List<ApiUlink>>.value(result.companyUlinks);
+        _login = ApiLoginResult(
+          session: _login.session,
+          companies: _login.companies,
+          ulinks: result.companyUlinks,
+          ulinksInStock: _login.ulinksInStock
+              .where((item) => item.uid != stock.uid)
+              .toList(growable: false),
+        );
+      });
       await const AcknowledgementSoundService().play();
     } on UlinkFlashException catch (error) {
       if (mounted) setState(() => _flashError = error.message);
@@ -228,6 +247,89 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final assignedCount = _login.companies.fold<int>(
+      0,
+      (total, company) => total + (company.uCount ?? 0),
+    );
+    return DashboardShell(
+      companies: _login.companies,
+      stock: _eligibleStock,
+      assignedCount: assignedCount,
+      selectedCompany: _selectedCompany,
+      selectedStock: _selectedStock,
+      selectedAppType: _selectedAppType,
+      flashStage: _flashStage,
+      flashError: _flashError,
+      settingsAvailable: _flashedSettingsClient != null,
+      assignedUlinks: _companyUlinks,
+      session: _login.session,
+      repository: widget.repository,
+      loginPreferences: widget.loginPreferences,
+      onRefresh: _refreshLoginData,
+      onLogout: _logout,
+      onOpenSettings: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => UlinkDevicePickerScreen(
+            loginPreferences: widget.loginPreferences,
+          ),
+        ),
+      ),
+      onOpenCompany: (company) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ApiCompanyUlinksScreen(
+            company: company,
+            session: _login.session,
+            repository: widget.repository,
+            loginPreferences: widget.loginPreferences,
+          ),
+        ),
+      ),
+      onCompanySelected: _selectCompany,
+      onStockSelected: (stock) => setState(() => _selectedStock = stock),
+      onAppTypeSelected: (type) => setState(() => _selectedAppType = type),
+      onFlash: _flashSelectedUlink,
+      onOpenFlashedSettings: _openFlashedSettings,
+      onAssignedChanged: _setAssignedUlinks,
+      onRetryAssigned: _reloadSelectedCompany,
+    );
+  }
+
+  void _selectCompany(ApiCompany company) {
+    setState(() {
+      _selectedCompany = company;
+      _selectedStock = null;
+      _selectedAppType = null;
+      _companyUlinks = _loadCompanyUlinks(company);
+    });
+  }
+
+  Future<List<ApiUlink>> _loadCompanyUlinks(ApiCompany company) =>
+      widget.repository.getCompanyUlinks(
+        userId: _login.session.userId,
+        companyId: company.cid,
+      );
+
+  void _setAssignedUlinks(List<ApiUlink> ulinks) {
+    if (!mounted) return;
+    setState(() {
+      _companyUlinks = Future<List<ApiUlink>>.value(ulinks);
+      _login = ApiLoginResult(
+        session: _login.session,
+        companies: _login.companies,
+        ulinks: ulinks,
+        ulinksInStock: _login.ulinksInStock,
+      );
+    });
+  }
+
+  void _reloadSelectedCompany() {
+    final company = _selectedCompany;
+    if (company == null) return;
+    setState(() => _companyUlinks = _loadCompanyUlinks(company));
+  }
+
+  // ignore: unused_element
+  Widget _legacyBuild(BuildContext context) {
     const charcoal = Color(0xFF0C1116);
     const navy = Color(0xFF111E2B);
     final colors =
@@ -937,6 +1039,17 @@ class ApiDevicesScreen extends StatefulWidget {
 
 class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
   late Future<List<ApiDevice>> _devices = _load();
+  Future<List<ApiDevice>> _load() => widget.repository.getDevices(
+    userId: widget.session.userId,
+    companyId: widget.company.cid,
+    ulinkId: widget.ulink.uid,
+  );
+
+  /*
+   * The former route-local unflash orchestration is retained here as history
+   * while the route now invokes UlinkUnflashAction, the shared presentation
+   * entry point used by both dashboard locations.
+   *
   UlinkUnflashStage? _unflashStage;
   String? _unflashError;
   UlinkRepositoryUnflashApiGateway? _pendingUnflashApi;
@@ -1107,6 +1220,7 @@ class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
     }
   }
 
+  */
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: Text(widget.ulink.uCode)),
@@ -1135,29 +1249,15 @@ class _ApiDevicesScreenState extends State<ApiDevicesScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (widget.ulink.uif == true)
-                      FilledButton.icon(
-                        key: const Key('unflash-ulink'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.error,
-                        ),
-                        onPressed: _unflashStage == null
-                            ? _unflashSelectedUlink
-                            : null,
-                        icon: const Icon(Icons.warning_amber_outlined),
-                        label: const Text('Unflash U-Link'),
+                      UlinkUnflashAction(
+                        company: widget.company,
+                        ulink: widget.ulink,
+                        session: widget.session,
+                        repository: widget.repository,
+                        loginPreferences: widget.loginPreferences,
+                        filled: true,
+                        onCompleted: (_) => Navigator.of(context).pop(true),
                       ),
-                    if (_unflashStage != null || _unflashError != null) ...[
-                      const SizedBox(height: 12),
-                      _UnflashStatusPanel(
-                        stage: _unflashStage,
-                        error: _unflashError,
-                        onRetryPendingServerUpdate:
-                            _pendingUnflashApi == null ||
-                                _pendingUnflashSelection == null
-                            ? null
-                            : _retryPendingUnflashServerUpdate,
-                      ),
-                    ],
                     if (devices.isEmpty) ...[
                       const SizedBox(height: 16),
                       const _Empty('No devices are assigned to this U-Link.'),
@@ -1312,6 +1412,7 @@ String _friendly(Object? error) {
   };
 }
 
+// ignore: unused_element
 class _UnflashStatusPanel extends StatelessWidget {
   const _UnflashStatusPanel({
     this.stage,
