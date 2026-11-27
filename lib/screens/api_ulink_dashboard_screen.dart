@@ -1,6 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../core/theme/app_theme.dart';
+import '../core/theme/theme_controller.dart';
 import '../features/ulink_dashboard/presentation/dashboard_shell.dart';
 import '../features/ulink_dashboard/presentation/widgets/unflash_ulink_action.dart';
 import '../models/ulink_api_models.dart';
@@ -152,7 +155,9 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
     final confirmed =
         await showDialog<bool>(
           context: context,
-          builder: (context) => AlertDialog(
+          builder: (dialogContext) => Theme(
+            data: _dashboardTheme(context),
+            child: AlertDialog(
             title: const Text('Flash U-Link?'),
             content: Text(
               'Company: ${company.cName}\n'
@@ -163,14 +168,15 @@ class _ApiSiDashboardScreenState extends State<ApiSiDashboardScreen> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context, false),
+                onPressed: () => Navigator.pop(dialogContext, false),
                 child: const Text('Cancel'),
               ),
               FilledButton(
-                onPressed: () => Navigator.pop(context, true),
+                onPressed: () => Navigator.pop(dialogContext, true),
                 child: const Text('Flash'),
               ),
             ],
+            ),
           ),
         ) ??
         false;
@@ -1463,7 +1469,9 @@ Future<String?> _askForPassword(
   final controller = TextEditingController();
   return showDialog<String>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (dialogContext) => Theme(
+      data: _dashboardTheme(context),
+      child: AlertDialog(
       title: Text(title),
       content: TextField(
         controller: controller,
@@ -1473,14 +1481,23 @@ Future<String?> _askForPassword(
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => Navigator.pop(dialogContext),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, controller.text),
+          onPressed: () => Navigator.pop(dialogContext, controller.text),
           child: Text(actionLabel),
         ),
       ],
+      ),
     ),
+  );
+}
+
+ThemeData _dashboardTheme(BuildContext context) {
+  final systemBrightness = MediaQuery.platformBrightnessOf(context);
+  final controller = Provider.of<ThemeController?>(context, listen: false);
+  return UlinkAppTheme.forBrightness(
+    controller?.effectiveBrightness(systemBrightness) ?? systemBrightness,
   );
 }

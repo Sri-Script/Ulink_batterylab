@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_tokens.dart';
 
 class AppCard extends StatelessWidget {
@@ -10,22 +11,26 @@ class AppCard extends StatelessWidget {
   final EdgeInsetsGeometry? padding;
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens = theme.extension<UlinkThemeTokens>()!;
+    return Container(
     padding: padding,
     decoration: BoxDecoration(
-      color: AppTokens.surface,
+      color: theme.colorScheme.surface,
       borderRadius: BorderRadius.circular(AppTokens.r16),
       border: Border.all(
-        color: accent
-            ? AppTokens.teal.withValues(alpha: .55)
-            : AppTokens.border,
+        color: accent ? theme.colorScheme.primary.withValues(alpha: .55) : theme.colorScheme.outlineVariant,
       ),
-      boxShadow: accent
-          ? [BoxShadow(color: AppTokens.teal.withValues(alpha: .08), blurRadius: 18)]
+      boxShadow: accent && tokens.glow.alpha > 0
+          ? [BoxShadow(color: tokens.glow, blurRadius: 18)]
+          : tokens.cardShadow.alpha > 0
+          ? [BoxShadow(color: tokens.cardShadow, blurRadius: 16, offset: const Offset(0, 6))]
           : null,
     ),
     child: child,
-  );
+    );
+  }
 }
 
 class StatusChip extends StatelessWidget {
@@ -33,40 +38,43 @@ class StatusChip extends StatelessWidget {
     super.key,
     required this.label,
     required this.icon,
-    this.color = AppTokens.mutedText,
+    this.color,
   });
 
   final String label;
   final IconData icon;
-  final Color color;
+  final Color? color;
 
   @override
-  Widget build(BuildContext context) => Semantics(
+  Widget build(BuildContext context) {
+    final resolvedColor = color ?? Theme.of(context).extension<UlinkThemeTokens>()!.textMuted;
+    return Semantics(
     label: label,
     child: Container(
       constraints: const BoxConstraints(minHeight: 28),
       padding: const EdgeInsets.symmetric(horizontal: AppTokens.s8, vertical: AppTokens.s4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: .12),
+        color: resolvedColor.withValues(alpha: .12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: .42)),
+        border: Border.all(color: resolvedColor.withValues(alpha: .42)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: color),
+          Icon(icon, size: 14, color: resolvedColor),
           const SizedBox(width: AppTokens.s4),
           Flexible(
             child: Text(
               label,
               overflow: TextOverflow.ellipsis,
-              style: AppTokens.labelStyle.copyWith(color: color),
+              style: AppTokens.labelStyle.copyWith(color: resolvedColor),
             ),
           ),
         ],
       ),
     ),
-  );
+    );
+  }
 }
 
 class SectionHeader extends StatelessWidget {
@@ -87,7 +95,7 @@ class SectionHeader extends StatelessWidget {
             Text(title, style: Theme.of(context).textTheme.titleLarge),
             if (subtitle != null) ...[
               const SizedBox(height: AppTokens.s4),
-              Text(subtitle!, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppTokens.mutedText)),
+              Text(subtitle!, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted)),
             ],
           ],
         ),
@@ -115,13 +123,13 @@ class StatCard extends StatelessWidget {
           Container(
             width: 32,
             height: 32,
-            decoration: BoxDecoration(color: AppTokens.teal.withValues(alpha: .12), shape: BoxShape.circle),
-            child: Icon(icon, color: AppTokens.teal, size: 18),
+            decoration: BoxDecoration(color: Theme.of(context).colorScheme.primary.withValues(alpha: .12), shape: BoxShape.circle),
+            child: Icon(icon, color: Theme.of(context).colorScheme.primary, size: 18),
           ),
           const Spacer(),
           Text(value, style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 2),
-          Text(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTokens.labelStyle),
+          Text(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTokens.labelStyle.copyWith(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted)),
         ],
       ),
     ),
@@ -148,7 +156,7 @@ class PickerField extends StatelessWidget {
     button: true,
     enabled: enabled,
     child: Material(
-      color: Colors.transparent,
+      color: Theme.of(context).colorScheme.surface.withValues(alpha: 0),
       child: InkWell(
         key: key,
         onTap: enabled ? onTap : null,
@@ -157,9 +165,9 @@ class PickerField extends StatelessWidget {
           constraints: const BoxConstraints(minHeight: 52),
           padding: const EdgeInsets.symmetric(horizontal: AppTokens.s12, vertical: AppTokens.s8),
           decoration: BoxDecoration(
-            color: enabled ? AppTokens.elevatedSurface : AppTokens.surface.withValues(alpha: .6),
+            color: enabled ? Theme.of(context).extension<UlinkThemeTokens>()!.surfaceElevated : Theme.of(context).colorScheme.surface.withValues(alpha: .6),
             borderRadius: BorderRadius.circular(AppTokens.r12),
-            border: Border.all(color: enabled ? AppTokens.border : AppTokens.border.withValues(alpha: .45)),
+            border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: enabled ? 1 : .45)),
           ),
           child: Row(
             children: [
@@ -168,10 +176,10 @@ class PickerField extends StatelessWidget {
                   value ?? label,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: value == null ? TextStyle(color: AppTokens.mutedText.withValues(alpha: enabled ? 1 : .55)) : null,
+                  style: value == null ? TextStyle(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted.withValues(alpha: enabled ? 1 : .55)) : null,
                 ),
               ),
-              Icon(Icons.expand_more, color: enabled ? AppTokens.teal : AppTokens.mutedText),
+              Icon(Icons.expand_more, color: enabled ? Theme.of(context).colorScheme.primary : Theme.of(context).extension<UlinkThemeTokens>()!.textMuted),
             ],
           ),
         ),
@@ -271,8 +279,8 @@ class StepCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 14,
-                backgroundColor: completed ? AppTokens.teal : AppTokens.elevatedSurface,
-                child: Icon(completed ? Icons.check : Icons.lock_outline, size: 16, color: completed ? AppTokens.background : AppTokens.mutedText),
+                backgroundColor: completed ? Theme.of(context).colorScheme.primary : Theme.of(context).extension<UlinkThemeTokens>()!.surfaceElevated,
+                child: Icon(completed ? Icons.check : Icons.lock_outline, size: 16, color: completed ? Theme.of(context).colorScheme.onPrimary : Theme.of(context).extension<UlinkThemeTokens>()!.textMuted),
               ),
               const SizedBox(width: AppTokens.s8),
               Expanded(child: Text('$number. $title', style: Theme.of(context).textTheme.titleMedium)),
@@ -280,7 +288,7 @@ class StepCard extends StatelessWidget {
           ),
           if (summary != null) ...[
             const SizedBox(height: AppTokens.s4),
-            Text(summary!, style: AppTokens.labelStyle.copyWith(color: AppTokens.teal)),
+            Text(summary!, style: AppTokens.labelStyle.copyWith(color: Theme.of(context).colorScheme.primary)),
           ],
           const SizedBox(height: AppTokens.s12),
           IgnorePointer(ignoring: !unlocked, child: child),
@@ -311,7 +319,7 @@ class SelectableOptionCard extends StatelessWidget {
       button: true,
       selected: selected,
       child: Material(
-        color: Colors.transparent,
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0),
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(AppTokens.r12),
@@ -321,13 +329,13 @@ class SelectableOptionCard extends StatelessWidget {
             constraints: const BoxConstraints(minHeight: 88),
             padding: const EdgeInsets.all(AppTokens.s12),
             decoration: BoxDecoration(
-              color: selected ? AppTokens.teal.withValues(alpha: .13) : AppTokens.elevatedSurface,
+              color: selected ? Theme.of(context).colorScheme.primary.withValues(alpha: .13) : Theme.of(context).extension<UlinkThemeTokens>()!.surfaceElevated,
               borderRadius: BorderRadius.circular(AppTokens.r12),
-              border: Border.all(color: selected ? AppTokens.teal : AppTokens.border),
+              border: Border.all(color: selected ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.outlineVariant),
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: [Icon(icon, color: selected ? AppTokens.teal : AppTokens.mutedText), const SizedBox(height: AppTokens.s8), Text(title)],
+              children: [Icon(icon, color: selected ? Theme.of(context).colorScheme.primary : Theme.of(context).extension<UlinkThemeTokens>()!.textMuted), const SizedBox(height: AppTokens.s8), Text(title)],
             ),
           ),
         ),
@@ -345,15 +353,28 @@ class PrimaryActionButton extends StatelessWidget {
   final IconData icon;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
+  Widget build(BuildContext context) {
+    final tokens = Theme.of(context).extension<UlinkThemeTokens>()!;
+    return SizedBox(
     width: double.infinity,
     height: 52,
-    child: FilledButton.icon(
-      onPressed: loading ? null : onPressed,
-      icon: loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : Icon(icon),
-      label: Text(label),
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: onPressed == null ? null : LinearGradient(colors: [tokens.primaryGradientStart, tokens.primaryGradientEnd]),
+        borderRadius: BorderRadius.circular(AppTokens.r12),
+      ),
+      child: FilledButton.icon(
+        style: FilledButton.styleFrom(
+          backgroundColor: onPressed == null ? null : Theme.of(context).colorScheme.surface.withValues(alpha: 0),
+          foregroundColor: tokens.onPrimaryAction,
+        ),
+        onPressed: loading ? null : onPressed,
+        icon: loading ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: tokens.onPrimaryAction)) : Icon(icon),
+        label: Text(label),
+      ),
     ),
-  );
+    );
+  }
 }
 
 class EmptyState extends StatelessWidget {
@@ -368,7 +389,7 @@ class EmptyState extends StatelessWidget {
       padding: const EdgeInsets.all(AppTokens.s24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        children: [Icon(icon, size: 36, color: AppTokens.mutedText), const SizedBox(height: AppTokens.s12), Text(message, textAlign: TextAlign.center, style: const TextStyle(color: AppTokens.mutedText))],
+        children: [Icon(icon, size: 36, color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted), const SizedBox(height: AppTokens.s12), Text(message, textAlign: TextAlign.center, style: TextStyle(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted))],
       ),
     ),
   );
@@ -386,7 +407,7 @@ class ErrorState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.cloud_off_outlined, size: 36, color: AppTokens.warning),
+          Icon(Icons.cloud_off_outlined, size: 36, color: Theme.of(context).extension<UlinkThemeTokens>()!.warning),
           const SizedBox(height: AppTokens.s12),
           const Text('Unable to load this information. Please try again.', textAlign: TextAlign.center),
           const SizedBox(height: AppTokens.s12),
@@ -405,6 +426,6 @@ class SkeletonBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     height: height,
-    decoration: BoxDecoration(color: AppTokens.elevatedSurface, borderRadius: BorderRadius.circular(AppTokens.r12)),
+    decoration: BoxDecoration(color: Theme.of(context).extension<UlinkThemeTokens>()!.surfaceElevated, borderRadius: BorderRadius.circular(AppTokens.r12)),
   );
 }

@@ -69,7 +69,9 @@ class _UlinkUnflashActionState extends State<UlinkUnflashAction> {
     final confirmed =
         await showDialog<bool>(
           context: context,
-          builder: (context) => AlertDialog(
+          builder: (dialogContext) => Theme(
+            data: Theme.of(context),
+            child: AlertDialog(
             title: const Text('Unflash U-Link?'),
             content: Text(
               'Company: ${widget.company.cName}\n'
@@ -83,11 +85,12 @@ class _UlinkUnflashActionState extends State<UlinkUnflashAction> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
-                onPressed: () => Navigator.pop(context, true),
+                style: FilledButton.styleFrom(backgroundColor: Theme.of(dialogContext).colorScheme.error),
+                onPressed: () => Navigator.pop(dialogContext, true),
                 child: const Text('Permanently unflash U-Link'),
               ),
             ],
+            ),
           ),
         ) ??
         false;
@@ -113,13 +116,16 @@ class _UlinkUnflashActionState extends State<UlinkUnflashAction> {
       final next = await showDialog<String>(
         context: context,
         barrierDismissible: false,
-        builder: (context) => AlertDialog(
+        builder: (dialogContext) => Theme(
+          data: Theme.of(context),
+          child: AlertDialog(
           title: const Text('U-Link unflashed successfully'),
           content: const Text('The U-Link is now factory-advertising as ULINK and its server assignment has been cleared.'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, 'dashboard'), child: const Text('Return to dashboard')),
-            FilledButton(onPressed: () => Navigator.pop(context, 'flash'), child: const Text('Flash a new U-Code')),
+            TextButton(onPressed: () => Navigator.pop(dialogContext, 'dashboard'), child: const Text('Return to dashboard')),
+            FilledButton(onPressed: () => Navigator.pop(dialogContext, 'flash'), child: const Text('Flash a new U-Code')),
           ],
+          ),
         ),
       );
       if (mounted && next != null) widget.onCompleted?.call(ulinks);
@@ -178,7 +184,7 @@ class _UlinkUnflashActionState extends State<UlinkUnflashAction> {
           )
         : OutlinedButton.icon(
             key: const Key('unflash-ulink'),
-            style: OutlinedButton.styleFrom(foregroundColor: AppTokens.danger, side: const BorderSide(color: AppTokens.danger), minimumSize: const Size(48, 44)),
+            style: OutlinedButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error, side: BorderSide(color: Theme.of(context).colorScheme.error), minimumSize: const Size(48, 44)),
             onPressed: _stage == null ? _unflashSelectedUlink : null,
             icon: _stage == null ? const Icon(Icons.warning_amber_outlined) : const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
             label: const Text('Unflash'),
@@ -196,7 +202,7 @@ class _UlinkUnflashActionState extends State<UlinkUnflashAction> {
               children: [
                 Text('Unflash status', style: Theme.of(context).textTheme.titleSmall),
                 if (_stage != null) ...[const SizedBox(height: AppTokens.s8), Text(_stage!.label)],
-                if (_error != null) ...[const SizedBox(height: AppTokens.s8), Text(_error!, style: const TextStyle(color: AppTokens.danger))],
+                if (_error != null) ...[const SizedBox(height: AppTokens.s8), Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))],
                 if (_pendingApi != null && _pendingSelection != null) ...[
                   const SizedBox(height: AppTokens.s12),
                   OutlinedButton(onPressed: _retryPendingUnflashServerUpdate, child: const Text('Retry pending server update')),
@@ -218,13 +224,16 @@ Future<String?> _askForPassword(
   final controller = TextEditingController();
   return showDialog<String>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (dialogContext) => Theme(
+      data: Theme.of(context),
+      child: AlertDialog(
       title: Text(title),
       content: TextField(controller: controller, obscureText: true, autofocus: true, decoration: const InputDecoration(labelText: 'Password')),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: Text(actionLabel)),
+        TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: Text(actionLabel)),
       ],
+      ),
     ),
   );
 }

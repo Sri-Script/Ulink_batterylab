@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
-import '../../../core/theme/app_tokens.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/theme_controller.dart';
 import '../../../models/ulink_api_models.dart';
 import '../../../services/ulink_api_repository.dart';
 import '../../../services/ulink_flash_workflow.dart';
@@ -72,91 +75,116 @@ class _DashboardShellState extends State<DashboardShell> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Theme(
-      data: theme.copyWith(
-        colorScheme: theme.colorScheme.copyWith(
-          brightness: Brightness.dark,
-          primary: AppTokens.teal,
-          surface: AppTokens.surface,
-          error: AppTokens.danger,
-          onSurface: AppTokens.text,
-          onSurfaceVariant: AppTokens.mutedText,
-          outlineVariant: AppTokens.border,
-        ),
-        scaffoldBackgroundColor: AppTokens.background,
-        appBarTheme: const AppBarTheme(backgroundColor: AppTokens.background, foregroundColor: AppTokens.text, elevation: 0),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: AppTokens.elevatedSurface,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTokens.r12), borderSide: const BorderSide(color: AppTokens.border)),
-          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTokens.r12), borderSide: const BorderSide(color: AppTokens.border)),
-        ),
-      ),
-      child: Scaffold(
-        appBar: AppBar(
-          automaticallyImplyLeading: false,
-          title: const Text('U-Link Dashboard'),
-          actions: [
-            Semantics(
-              label: 'Refresh dashboard',
-              button: true,
-              child: IconButton(onPressed: widget.onRefresh, tooltip: 'Refresh Session Data', icon: const Icon(Icons.refresh)),
-            ),
-            Semantics(
-              label: 'Log out',
-              button: true,
-              child: IconButton(onPressed: widget.onLogout, tooltip: 'Log out', icon: const Icon(Icons.logout)),
-            ),
-          ],
-        ),
-        body: IndexedStack(
-          index: _index,
-          children: [
-            HomeScreen(
-              companies: widget.companies,
-              stock: widget.stock,
-              assignedCount: widget.assignedCount,
-              onOpenSettings: widget.onOpenSettings,
-              onOpenCompany: widget.onOpenCompany,
-              onRefresh: widget.onRefresh,
-            ),
-            ProvisionScreen(
-              companies: widget.companies,
-              eligibleStock: widget.stock,
-              selectedCompany: widget.selectedCompany,
-              selectedStock: widget.selectedStock,
-              selectedAppType: widget.selectedAppType,
-              flashStage: widget.flashStage,
-              flashError: widget.flashError,
-              settingsAvailable: widget.settingsAvailable,
-              assignedUlinks: widget.assignedUlinks,
-              session: widget.session,
-              repository: widget.repository,
-              loginPreferences: widget.loginPreferences,
-              onCompanySelected: widget.onCompanySelected,
-              onStockSelected: widget.onStockSelected,
-              onAppTypeSelected: widget.onAppTypeSelected,
-              onFlash: widget.onFlash,
-              onOpenSettings: widget.onOpenFlashedSettings,
-              onAssignedChanged: widget.onAssignedChanged,
-              onRetryAssigned: widget.onRetryAssigned,
-            ),
-            const AttachDetachScreen(),
-          ],
-        ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (index) => setState(() => _index = index),
-          indicatorColor: AppTokens.teal.withValues(alpha: .25),
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
-            NavigationDestination(icon: Icon(Icons.flash_on_outlined), selectedIcon: Icon(Icons.flash_on), label: 'Provision'),
-            NavigationDestination(icon: Icon(Icons.link_outlined), selectedIcon: Icon(Icons.link), label: 'Attach / Detach'),
-          ],
-        ),
-      ),
+    final systemBrightness = MediaQuery.platformBrightnessOf(context);
+    final controller = Provider.of<ThemeController?>(context);
+    final brightness = controller?.effectiveBrightness(systemBrightness) ?? systemBrightness;
+    return Builder(
+      builder: (context) {
+        final theme = UlinkAppTheme.forBrightness(brightness);
+        return AnimatedTheme(
+          data: theme,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          child: Builder(
+            builder: (themedContext) {
+              final useLightIcons = brightness == Brightness.dark;
+              return AnnotatedRegion<SystemUiOverlayStyle>(
+                value: SystemUiOverlayStyle(
+                  statusBarColor: theme.scaffoldBackgroundColor,
+                  statusBarIconBrightness: useLightIcons ? Brightness.light : Brightness.dark,
+                  statusBarBrightness: useLightIcons ? Brightness.dark : Brightness.light,
+                  systemNavigationBarColor: theme.colorScheme.surface,
+                  systemNavigationBarIconBrightness: useLightIcons ? Brightness.light : Brightness.dark,
+                ),
+                child: Scaffold(
+                  appBar: AppBar(
+                    automaticallyImplyLeading: false,
+                    title: const Text('U-Link Dashboard'),
+                    actions: [
+                      Semantics(
+                        label: 'Refresh dashboard',
+                        button: true,
+                        child: IconButton(onPressed: widget.onRefresh, tooltip: 'Refresh Session Data', icon: const Icon(Icons.refresh)),
+                      ),
+                      Semantics(
+                        label: brightness == Brightness.dark ? 'Switch to light mode' : 'Switch to dark mode',
+                        button: true,
+                        child: IconButton(
+                          tooltip: brightness == Brightness.dark ? 'Switch to light mode' : 'Switch to dark mode',
+                          onPressed: () {
+                            HapticFeedback.lightImpact();
+                            controller?.toggle(systemBrightness);
+                          },
+                          icon: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 250),
+                            transitionBuilder: (child, animation) => FadeTransition(
+                              opacity: animation,
+                              child: RotationTransition(turns: Tween<double>(begin: .75, end: 1).animate(animation), child: child),
+                            ),
+                            child: Icon(
+                              brightness == Brightness.dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+                              key: ValueKey(brightness),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Semantics(
+                        label: 'Log out',
+                        button: true,
+                        child: IconButton(onPressed: widget.onLogout, tooltip: 'Log out', icon: const Icon(Icons.logout)),
+                      ),
+                    ],
+                  ),
+                  body: IndexedStack(
+                    index: _index,
+                    children: [
+                      HomeScreen(
+                        companies: widget.companies,
+                        stock: widget.stock,
+                        assignedCount: widget.assignedCount,
+                        onOpenSettings: widget.onOpenSettings,
+                        onOpenCompany: widget.onOpenCompany,
+                        onRefresh: widget.onRefresh,
+                      ),
+                      ProvisionScreen(
+                        companies: widget.companies,
+                        eligibleStock: widget.stock,
+                        selectedCompany: widget.selectedCompany,
+                        selectedStock: widget.selectedStock,
+                        selectedAppType: widget.selectedAppType,
+                        flashStage: widget.flashStage,
+                        flashError: widget.flashError,
+                        settingsAvailable: widget.settingsAvailable,
+                        assignedUlinks: widget.assignedUlinks,
+                        session: widget.session,
+                        repository: widget.repository,
+                        loginPreferences: widget.loginPreferences,
+                        onCompanySelected: widget.onCompanySelected,
+                        onStockSelected: widget.onStockSelected,
+                        onAppTypeSelected: widget.onAppTypeSelected,
+                        onFlash: widget.onFlash,
+                        onOpenSettings: widget.onOpenFlashedSettings,
+                        onAssignedChanged: widget.onAssignedChanged,
+                        onRetryAssigned: widget.onRetryAssigned,
+                      ),
+                      const AttachDetachScreen(),
+                    ],
+                  ),
+                  bottomNavigationBar: NavigationBar(
+                    selectedIndex: _index,
+                    onDestinationSelected: (index) => setState(() => _index = index),
+                    destinations: const [
+                      NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
+                      NavigationDestination(icon: Icon(Icons.flash_on_outlined), selectedIcon: Icon(Icons.flash_on), label: 'Provision'),
+                      NavigationDestination(icon: Icon(Icons.link_outlined), selectedIcon: Icon(Icons.link), label: 'Attach / Detach'),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/app_config.dart';
+import 'core/theme/theme_controller.dart';
 import 'providers/connection_controller.dart';
 import 'screens/architecture_choice_screen.dart';
 import 'screens/calibration_history_screen.dart';
@@ -20,11 +21,14 @@ import 'services/local_notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const BatteryLabApp());
+  final themeController = await ThemeController.load();
+  runApp(BatteryLabApp(themeController: themeController));
 }
 
 class BatteryLabApp extends StatefulWidget {
-  const BatteryLabApp({super.key});
+  const BatteryLabApp({super.key, required this.themeController});
+
+  final ThemeController themeController;
 
   @override
   State<BatteryLabApp> createState() => _BatteryLabAppState();
@@ -45,8 +49,11 @@ class _BatteryLabAppState extends State<BatteryLabApp> {
   }
 
   @override
-  Widget build(BuildContext context) => ChangeNotifierProvider(
-    create: (_) => ConnectionController(),
+  Widget build(BuildContext context) => MultiProvider(
+    providers: [
+      ChangeNotifierProvider(create: (_) => ConnectionController()),
+      ChangeNotifierProvider.value(value: widget.themeController),
+    ],
     child: MaterialApp(
       title: 'BattMobile',
       debugShowCheckedModeBanner: false,

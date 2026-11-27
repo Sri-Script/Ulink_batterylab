@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_tokens.dart';
 import '../widgets/dashboard_widgets.dart';
 
@@ -19,24 +20,24 @@ class AttachDetachScreen extends StatelessWidget {
               width: 92,
               height: 92,
               decoration: BoxDecoration(
-                color: AppTokens.teal.withValues(alpha: .12),
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: .12),
                 shape: BoxShape.circle,
-                border: Border.all(color: AppTokens.teal.withValues(alpha: .35)),
+                border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: .35)),
               ),
-              child: const Stack(
+              child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  Icon(Icons.hub_outlined, size: 46, color: AppTokens.teal),
-                  Positioned(right: 18, bottom: 17, child: Icon(Icons.link, size: 22, color: AppTokens.success)),
+                  Icon(Icons.hub_outlined, size: 46, color: Theme.of(context).colorScheme.primary),
+                  Positioned(right: 18, bottom: 17, child: Icon(Icons.link, size: 22, color: Theme.of(context).extension<UlinkThemeTokens>()!.success)),
                 ],
               ),
             ),
             const SizedBox(height: AppTokens.s24),
             Text('Attach / Detach Devices', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: AppTokens.s12),
-            const Text('Device attachment will be available in a future update.', textAlign: TextAlign.center, style: TextStyle(color: AppTokens.mutedText)),
+            Text('Device attachment will be available in a future update.', textAlign: TextAlign.center, style: TextStyle(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted)),
             const SizedBox(height: AppTokens.s8),
-            const Text('No devices or U-Links are changed from this screen.', textAlign: TextAlign.center, style: AppTokens.labelStyle),
+            Text('No devices or U-Links are changed from this screen.', textAlign: TextAlign.center, style: AppTokens.labelStyle.copyWith(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted)),
           ],
         ),
       ),

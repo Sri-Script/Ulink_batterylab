@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_tokens.dart';
 import '../../../../models/ulink_api_models.dart';
 import '../../../../services/ulink_api_repository.dart';
@@ -59,14 +60,17 @@ class ProvisionScreen extends StatelessWidget {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => SearchablePickerBottomSheet<ApiCompany>(
-        title: 'Select company',
-        items: companies,
-        labelFor: (company) => company.cName,
-        onSelected: (company) {
-          Navigator.pop(sheetContext);
-          onCompanySelected(company);
-        },
+      builder: (sheetContext) => Theme(
+        data: Theme.of(context),
+        child: SearchablePickerBottomSheet<ApiCompany>(
+          title: 'Select company',
+          items: companies,
+          labelFor: (company) => company.cName,
+          onSelected: (company) {
+            Navigator.pop(sheetContext);
+            onCompanySelected(company);
+          },
+        ),
       ),
     );
   }
@@ -75,14 +79,17 @@ class ProvisionScreen extends StatelessWidget {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => SearchablePickerBottomSheet<ApiUlink>(
-        title: 'Select stock U-Link',
-        items: eligibleStock,
-        labelFor: (ulink) => ulink.uCode,
-        onSelected: (ulink) {
-          Navigator.pop(sheetContext);
-          onStockSelected(ulink);
-        },
+      builder: (sheetContext) => Theme(
+        data: Theme.of(context),
+        child: SearchablePickerBottomSheet<ApiUlink>(
+          title: 'Select stock U-Link',
+          items: eligibleStock,
+          labelFor: (ulink) => ulink.uCode,
+          onSelected: (ulink) {
+            Navigator.pop(sheetContext);
+            onStockSelected(ulink);
+          },
+        ),
       ),
     );
   }
@@ -97,7 +104,7 @@ class ProvisionScreen extends StatelessWidget {
           children: [
             Text('Provision a U-Link', style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: AppTokens.s4),
-            const Text('Factory device must advertise as ULINK.', style: TextStyle(color: AppTokens.mutedText)),
+            Text('Factory device must advertise as ULINK.', style: TextStyle(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted)),
             const SizedBox(height: AppTokens.s16),
             StepCard(
               number: 1,
@@ -169,9 +176,9 @@ class ProvisionScreen extends StatelessWidget {
                       Text('Flash status', style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: AppTokens.s12),
                       if (flashError != null)
-                        Row(children: [const Icon(Icons.error_outline, color: AppTokens.danger), const SizedBox(width: AppTokens.s8), Expanded(child: Text(flashError!))])
+                        Row(children: [Icon(Icons.error_outline, color: Theme.of(context).colorScheme.error), const SizedBox(width: AppTokens.s8), Expanded(child: Text(flashError!))])
                       else if (settingsAvailable)
-                        const Row(children: [Icon(Icons.check_circle_outline, color: AppTokens.success), SizedBox(width: AppTokens.s8), Text('U-Link provisioned')])
+                        Row(children: [Icon(Icons.check_circle_outline, color: Theme.of(context).extension<UlinkThemeTokens>()!.success), const SizedBox(width: AppTokens.s8), const Text('U-Link provisioned')])
                       else ...[
                         const LinearProgressIndicator(),
                         const SizedBox(height: AppTokens.s12),
@@ -268,7 +275,7 @@ class _AssignedUlinks extends StatelessWidget {
                       StatusChip(
                         label: ulink.uif == true ? 'Flashed' : 'Not flashed',
                         icon: ulink.uif == true ? Icons.check_circle_outline : Icons.pending_outlined,
-                        color: ulink.uif == true ? AppTokens.success : AppTokens.warning,
+                        color: ulink.uif == true ? Theme.of(context).extension<UlinkThemeTokens>()!.success : Theme.of(context).extension<UlinkThemeTokens>()!.warning,
                       ),
                     ],
                   ),

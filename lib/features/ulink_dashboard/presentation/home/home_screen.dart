@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_tokens.dart';
 import '../../../../models/ulink_api_models.dart';
 import '../widgets/dashboard_widgets.dart';
@@ -46,7 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: AppCard(
               accent: true,
               child: Material(
-                color: Colors.transparent,
+                color: Theme.of(context).colorScheme.surface.withValues(alpha: 0),
                 child: InkWell(
                   onTap: widget.onOpenSettings,
                   borderRadius: BorderRadius.circular(AppTokens.r16),
@@ -57,8 +58,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         Container(
                           width: 48,
                           height: 48,
-                          decoration: BoxDecoration(color: AppTokens.teal.withValues(alpha: .12), shape: BoxShape.circle),
-                          child: const Icon(Icons.bluetooth_searching, color: AppTokens.teal),
+                          decoration: BoxDecoration(color: Theme.of(context).colorScheme.primary.withValues(alpha: .12), shape: BoxShape.circle),
+                          child: Icon(Icons.bluetooth_searching, color: Theme.of(context).colorScheme.primary),
                         ),
                         const SizedBox(width: AppTokens.s12),
                         Expanded(
@@ -67,12 +68,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Text('Connect to U-Link Settings', style: Theme.of(context).textTheme.titleMedium),
                               const SizedBox(height: AppTokens.s4),
-                              const Text('Find a U-Link and manage its settings.', style: TextStyle(color: AppTokens.mutedText)),
+                              Text('Find a U-Link and manage its settings.', style: TextStyle(color: Theme.of(context).extension<UlinkThemeTokens>()!.textMuted)),
                             ],
                           ),
                         ),
                         const SizedBox(width: AppTokens.s8),
-                        const StatusChip(label: 'Disconnected', icon: Icons.bluetooth_disabled, color: AppTokens.mutedText),
+                        const StatusChip(label: 'Disconnected', icon: Icons.bluetooth_disabled),
                       ],
                     ),
                   ),
@@ -117,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     StatusChip(
                       label: company.cia == null ? 'Status unknown' : company.cia! ? 'Active' : 'Inactive',
                       icon: company.cia == true ? Icons.check_circle_outline : Icons.pause_circle_outline,
-                      color: company.cia == true ? AppTokens.success : AppTokens.warning,
+                      color: company.cia == true ? Theme.of(context).extension<UlinkThemeTokens>()!.success : Theme.of(context).extension<UlinkThemeTokens>()!.warning,
                     ),
                     const Icon(Icons.chevron_right),
                   ],
@@ -141,9 +142,9 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.only(top: AppTokens.s8),
             child: AppCard(
               child: ListTile(
-                leading: const Icon(Icons.memory_outlined, color: AppTokens.teal),
+                leading: Icon(Icons.memory_outlined, color: Theme.of(context).colorScheme.primary),
                 title: Text(ulink.uCode),
-                trailing: const StatusChip(label: 'Not flashed', icon: Icons.pending_outlined, color: AppTokens.warning),
+                trailing: StatusChip(label: 'Not flashed', icon: Icons.pending_outlined, color: Theme.of(context).extension<UlinkThemeTokens>()!.warning),
               ),
             ),
           )),
